@@ -66,10 +66,12 @@ for _, mode in ipairs({'typo', '', true, 1}) do
     'invalid dns_config is rejected before read')
 end
 
-local function rejected_start(runtime, label, expected_error)
+local function rejected_start(runtime, label, expected_error, profile)
   local sockets = 0
   runtime.socket = {tcp = function() sockets = sockets + 1 end}
-  local ok, result = pcall(main.start, {console_log = false, syslog = false}, runtime)
+  profile = profile or {}
+  profile.console_log, profile.syslog = false, false
+  local ok, result = pcall(main.start, profile, runtime)
   check(not ok and type(result) == 'string', label .. ' rejects startup')
   check(sockets == 0, label .. ' creates no sockets')
   check(not contains_secret(result), label .. ' startup error keeps secrets private')
@@ -175,5 +177,43 @@ for index, message in ipairs(messages) do
   check(rebuilt == message, 'SYSLOG chunks preserve every byte ' .. index)
 end
 check(at == #sent + 1, 'no missing or extra SYSLOG records')
+
+-- The ready-to-run profile obtains policy, access and local names from one
+-- snapshot. No household values are present in the distributed profile.
+local automatic_text = unrelated .. routes .. [[
+dns service recursive
+dns host lan1
+ip lan1 address 192.0.2.1/24
+ip host router.home.arpa 192.0.2.1
+]]
+local auto_runtime, auto_calls = reader(automatic_text)
+local auto_policy, auto_error, settings = main.read_policy({auto_config = true}, auto_runtime)
+check(auto_policy and not auto_error and settings, 'automatic startup settings parsed')
+check(auto_calls.command == 1, 'automatic access and DNS policy share one snapshot')
+check(settings.listen_host == '0.0.0.0' and settings.listen_port == 53, 'ready TCP/53 listener')
+check(settings.local_dns_host == '192.0.2.1', 'local DNS uses an address permitted by dns host')
+check(#settings.local_names == 2, 'registered forward and reverse names imported')
+check(not contains_secret(settings), 'automatic settings do not retain unrelated config')
+local original_new_auto, captured = Relay.new, nil
+Relay.new = function(config)
+  captured = config
+  return {run = function(_, duration) check(duration == nil, 'release runs without a time limit'); return {} end,
+    close = function() end}
+end
+local supplied = {auto_config = true, console_log = false, syslog = false}
+local ok_auto, error_auto = pcall(main.start, supplied, auto_runtime)
+Relay.new = original_new_auto
+check(ok_auto, 'ready-to-run startup succeeds: ' .. tostring(error_auto))
+check(captured and captured.dns_policy and captured.listen_port == 53, 'relay receives parsed policy and listener')
+check(captured and #captured.local_names == 2 and #captured.allowed_clients > 0, 'relay receives local names and ACL')
+check(supplied.dns_policy == nil and supplied.allowed_clients == nil, 'startup leaves the supplied profile unchanged')
+for _, profile in ipairs({{auto_config = 'yes'}, {auto_config = true, dns_config = 'static'},
+  {auto_config = true, dns_policy = {routes = {}}}}) do
+  local runtime, calls = reader(automatic_text)
+  local policy, err = main.read_policy(profile, runtime)
+  check(not policy and err and calls.command == 0, 'conflicting auto profile rejected before I/O')
+end
+rejected_start(reader(unrelated .. routes .. 'dns host none\n'),
+  'native DNS access disabled in auto mode', nil, {auto_config = true})
 
 print('main policy and logging checks passed: ' .. count)

@@ -954,6 +954,37 @@ function tests.retry_uses_secondary_when_token_wait_outlasts_primary_backoff()
   r:close()
 end
 
+function tests.automatic_local_names_match_exactly_and_keep_other_queries_upstream()
+  local env = mock()
+  local r = relay(env, {local_zones = {}, local_names = {"Router.Home.Arpa.", "1.2.0.192.in-addr.arpa"}})
+  local exact = env.client(query(901, "ROUTER.HOME.ARPA."))
+  local child = env.client(query(902, "child.router.home.arpa."))
+  local sibling = env.client(query(903, "other.home.arpa."))
+  local reverse = env.client(query(904, "1.2.0.192.in-addr.arpa."))
+  until_true(r, function() return #exact.output > 0 and #child.output > 0
+    and #sibling.output > 0 and #reverse.output > 0 end)
+  eq(env.udp_count, 2, "only registered owners and reverse names use the native DNS")
+  eq(env.upstream_queries, 2, "children and siblings still use selected upstreams")
+  assert(not r:_local({canonical_name = "\16router.home.arpa\0"}), "literal dot label cannot spoof a registered name")
+  r:close()
+end
+
+function tests.dns_host_ranges_compare_octets_and_include_both_boundaries()
+  local env = mock()
+  local r = relay(env, {allowed_clients = {"198.18.1.250-198.18.2.10"}})
+  for _, address in ipairs({"198.18.1.250", "198.18.1.255", "198.18.2.0", "198.18.2.10"}) do
+    assert(r:_allowed(address), "range must allow " .. address)
+  end
+  for _, address in ipairs({"198.18.1.249", "198.18.2.11", "198.18.0.255", "invalid"}) do
+    assert(not r:_allowed(address), "range must reject " .. address)
+  end
+  local denied = env.client(query(905), "198.18.2.11")
+  local allowed = env.client(query(906), "198.18.2.10")
+  until_true(r, function() return denied.closed and #allowed.output > 0 end)
+  eq(env.upstream_queries, 1, "rejected client cannot create an upstream query")
+  r:close()
+end
+
 local names = {}
 for name in pairs(tests) do names[#names + 1] = name end
 table.sort(names)
