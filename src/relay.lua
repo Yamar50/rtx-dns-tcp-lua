@@ -12,7 +12,7 @@ local defaults = {
   idle_timeout = 30, dial_rate = 1, dial_burst = 2, resource_backoff = 30,
   select_timeout = 1, stats_interval = 60, policy_id = "default",
   local_dns_host = "127.0.0.1", local_dns_port = 53,
-  local_zones = {}, allowed_clients = {}, upstreams = {}
+  local_zones = {}, local_names = {}, allowed_clients = {}, upstreams = {}
 }
 
 local function call(object, method, ...)
@@ -61,6 +61,19 @@ local function ipv4(value)
 end
 
 local function cidr_matches(address, rule)
+  local first, last = string.match(rule, "^([^%-]+)%-([^%-]+)$")
+  if first then
+    local n, lo, hi = ipv4(address), ipv4(first), ipv4(last)
+    if not n or not lo or not hi then return false end
+    local function compare(a, b)
+      for i = 1, 4 do
+        if a[i] < b[i] then return -1 end
+        if a[i] > b[i] then return 1 end
+      end
+      return 0
+    end
+    return compare(n, lo) >= 0 and compare(n, hi) <= 0
+  end
   local host, bits = string.match(rule, "^([^/]+)/(%d+)$")
   if not host then return address == rule end
   bits = tonumber(bits)
@@ -148,12 +161,13 @@ function Relay.new(config, socket_api, logfn, wire, cache)
   assert(#cfg.allowed_clients > 0, "explicit allowed_clients is required")
   local self = setmetatable({ cfg = cfg, api = socket_api, wire = wire,
     cache = cache, log = logfn or function() end, clients = {}, endpoints = {}, routes = {},
-    jobs = {}, queue = {}, local_zones = {}, client_count = 0, pending = 0, serial = 0,
+    jobs = {}, queue = {}, local_zones = {}, local_names = {}, client_count = 0, pending = 0, serial = 0,
     tokens = cfg.dial_burst, counters = {}, events = {}, stopped = false,
     resource_until = 0, resource_recovery = false, resource_probe = nil, accept_retry_at = 0,
     last_raw = nil, elapsed = 0 }, Relay)
   self.now = self:_clock()
   for _, zone in ipairs(cfg.local_zones) do self.local_zones[#self.local_zones + 1] = canonical_zone(zone) end
+  for _, name in ipairs(cfg.local_names) do self.local_names[canonical_zone(name)] = true end
   self.started, self.token_time, self.next_stats = self.now, self.now, self.now + cfg.stats_interval
   local declared_routes = cfg.dns_policy and cfg.dns_policy.routes
     or { { policy_id = tostring(cfg.policy_id), upstreams = cfg.upstreams } }
@@ -241,6 +255,7 @@ function Relay:_allowed(address)
 end
 
 function Relay:_local(query)
+  if self.local_names[query.canonical_name] then return true end
   for _, zone in ipairs(self.local_zones) do
     if canonical_suffix(query.canonical_name, zone) then return true end
   end

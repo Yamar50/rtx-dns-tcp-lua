@@ -25,6 +25,12 @@ local function service_mode(text)
 end
 
 function M.read_policy(config, runtime)
+  if config.auto_config ~= nil and type(config.auto_config) ~= "boolean" then
+    return nil, "auto_config must be boolean"
+  end
+  if config.auto_config and (config.dns_config == "static" or config.dns_policy) then
+    return nil, "auto_config requires the running router configuration"
+  end
   if config.dns_config ~= nil and config.dns_config ~= "running" and config.dns_config ~= "static" then
     return nil, "dns_config must be omitted, running, or static"
   end
@@ -43,8 +49,14 @@ function M.read_policy(config, runtime)
   if service == "off" then return nil, "dns service is off" end
   -- Only the parsed DNS routing descriptors survive. Never log the full config.
   local policy, err = require("dns_policy").parse(text)
+  if err then return nil, err end
+  local automatic
+  if config.auto_config then
+    automatic, err = require("auto_config").parse(text)
+    if not automatic then return nil, err end
+  end
   text = nil
-  return policy, err
+  return policy, nil, automatic
 end
 
 function M.start(config, runtime)
@@ -65,8 +77,20 @@ function M.start(config, runtime)
       until first > #message
     end
   end
-  local policy, policy_error = M.read_policy(config, runtime)
-  assert(not policy_error, policy_error)
+  local policy, policy_error, automatic = M.read_policy(config, runtime)
+  if policy_error then
+    log("DNSRELAY startup failed " .. policy_error)
+    error(policy_error)
+  end
+  -- Copy the supplied profile; retain only parsed settings from show config.
+  local profile = {}
+  for key, value in pairs(config) do profile[key] = value end
+  config = profile
+  if automatic then
+    for key, value in pairs(automatic) do config[key] = value end
+    log("DNSRELAY automatic settings loaded ACL=" .. #config.allowed_clients
+      .. " local_names=" .. #config.local_names)
+  end
   config.dns_policy = policy
   if policy then log("DNSRELAY running DNS policy loaded routes=" .. #policy.routes) end
   config.sleep = function(seconds) runtime.sleep(seconds) end
