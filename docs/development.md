@@ -14,6 +14,9 @@
 
 | 設定 | 意味 |
 |---|---|
+| `max_clients_per_ip` | 同じ送信元IPからのTCP接続上限。既定4、設定範囲1〜32。全体の上限32とは別に適用 |
+| `query_rate_per_ip`, `query_burst_per_ip` | IP単位の問い合わせ枠の毎秒補充数と最大蓄積数。既定20件/秒・40件、設定範囲はそれぞれ1〜1000。全接続で共有し、切断しても枠を保持 |
+| `max_client_ips` | 送信元の管理表の上限。既定256、`max_clients`以上4096以下。接続中・利用枠が未回復のIPは追い出さない |
 | `auto_config` | `true`なら起動時にRTXのDNSアクセス許可・ローカル登録名を読み取り、TCP/53で開始。配布版で使用 |
 | `listen_host`, `listen_port` | RTX側の待受IPv4アドレス・ポート。試験は53053、内蔵UDP DNSをTCPで補完するときは53 |
 | `allowed_clients` | 利用を許可するIPv4アドレス・IP範囲・CIDRの配列。自動設定を使わない場合に明示必須 |
