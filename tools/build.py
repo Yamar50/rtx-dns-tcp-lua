@@ -18,7 +18,7 @@ def main():
               'local modules = {}\nlocal function require(name)\n'
               '  assert(modules[name], "module missing: " .. name)\n'
               '  return modules[name]\nend\n']
-    for name in ['dns_wire', 'cache', 'dns_policy', 'relay', 'main']:
+    for name in ['dns_wire', 'cache', 'dns_policy', 'auto_config', 'relay', 'main']:
         text = (ROOT / 'src' / (name + '.lua')).read_text()
         chunks.append(f'modules["{name}"] = (function()\n{text}\nend)()\n')
     if a.test:
