@@ -25,6 +25,10 @@ GitHubの[Releases](https://github.com/Yamar50/rtx-dns-tcp-lua/releases)から`r
 
 ## 初回インストール
 
+USBメモリやmicroSDカード、SFTP等でインストールします。
+
+### 例）USBメモリを使用する場合
+
 1. ダウンロードした`rtx-dns.lua`をFAT/FAT32形式のUSBメモリのルートに保存し、RTXに接続します。添付の`SHA256SUMS`で、転送前のファイルのSHA-256を確認できます。
 2. 管理者コンソールでファイルを確認します。
 
