@@ -1,0 +1,9 @@
+build/
+artifacts/
+__pycache__/
+*.pyc
+.DS_Store
+config/local*.lua
+*.pcap
+*.pcapng
+
