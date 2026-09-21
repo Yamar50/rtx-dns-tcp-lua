@@ -21,7 +21,7 @@ Yamaha RTXの内蔵UDP DNSと静的ホスト登録を維持し、LuaでTCP DNS�
 
 起動時に`dns host`からアクセス許可、`ip host`／`dns static`からローカルの登録名、`dns server select`／`dns server`から上流DNSを読み取ります。TCP/53で待ち受け、256件のキャッシュを使い、終了時間を設けずに動作します。`dns host any`または省略時は、RTXの既定値どおり全ホストを許可します。
 
-`/lua/rtx-dns.lua`へコピーした後は、次のコマンドで開始できます。`100`は未使用のスケジュール番号に置き換えます。
+USBメモリやmicroSDカード、SFTP等でインストールします。`/lua/rtx-dns.lua`へコピーした後は、次のコマンドで開始できます。`100`は未使用のスケジュール番号に置き換えます。
 
 ```text
 lua /lua/rtx-dns.lua
