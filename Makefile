@@ -1,10 +1,11 @@
 LUA ?= lua
 PYTHON ?= python3
 
-.PHONY: test build
+.PHONY: test build release
 test:
 	$(LUA) tests/test_wire_cache.lua
 	$(LUA) tests/test_dns_policy.lua
+	$(LUA) tests/test_auto_config.lua
 	$(LUA) tests/test_policy_wire.lua
 	$(LUA) tests/test_main.lua
 	$(LUA) tests/test_relay.lua
@@ -14,3 +15,6 @@ test:
 
 build:
 	$(PYTHON) tools/build.py --config config/example.lua --output build/rtx-dns.lua
+
+release:
+	$(PYTHON) tools/build.py --config config/release.lua --output build/release/rtx-dns.lua
