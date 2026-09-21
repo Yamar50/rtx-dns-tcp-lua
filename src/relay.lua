@@ -7,6 +7,8 @@ Relay.__index = Relay
 local defaults = {
   listen_host = "127.0.0.1", listen_port = 53053, backlog = 32,
   max_clients = 32, max_pending = 32, client_pipeline = 4, pipeline = 4,
+  max_clients_per_ip = 4, query_rate_per_ip = 20, query_burst_per_ip = 40,
+  max_client_ips = 256,
   max_query = 4096, connect_timeout = 1, response_timeout = 2,
   total_timeout = 5, client_read_timeout = 3, client_write_timeout = 2,
   idle_timeout = 30, dial_rate = 1, dial_burst = 2, resource_backoff = 30,
@@ -154,6 +156,14 @@ function Relay.new(config, socket_api, logfn, wire, cache)
   assert(valid_port(cfg.listen_port), "invalid listen_port")
   assert(valid_port(cfg.local_dns_port), "invalid local_dns_port")
   assert(cfg.max_clients > 0 and cfg.max_clients <= 32, "max_clients must be 1..32")
+  local function bounded_integer(value, maximum)
+    return type(value) == "number" and value >= 1 and value <= maximum and value % 1 == 0
+  end
+  assert(bounded_integer(cfg.max_clients_per_ip, 32), "max_clients_per_ip must be 1..32")
+  assert(bounded_integer(cfg.query_rate_per_ip, 1000), "query_rate_per_ip must be 1..1000")
+  assert(bounded_integer(cfg.query_burst_per_ip, 1000), "query_burst_per_ip must be 1..1000")
+  assert(bounded_integer(cfg.max_client_ips, 4096) and cfg.max_client_ips >= cfg.max_clients,
+    "max_client_ips must be max_clients..4096")
   assert(cfg.max_pending > 0 and cfg.max_pending <= 32, "max_pending must be 1..32")
   assert(cfg.pipeline > 0 and cfg.pipeline <= 4, "pipeline must be 1..4")
   assert(cfg.client_pipeline > 0 and cfg.client_pipeline <= 4, "client_pipeline must be 1..4")
@@ -162,6 +172,7 @@ function Relay.new(config, socket_api, logfn, wire, cache)
   local self = setmetatable({ cfg = cfg, api = socket_api, wire = wire,
     cache = cache, log = logfn or function() end, clients = {}, endpoints = {}, routes = {},
     jobs = {}, queue = {}, local_zones = {}, local_names = {}, client_count = 0, pending = 0, serial = 0,
+    client_ips = {}, client_ip_count = 0,
     tokens = cfg.dial_burst, counters = {}, events = {}, stopped = false,
     resource_until = 0, resource_recovery = false, resource_probe = nil, accept_retry_at = 0,
     last_raw = nil, elapsed = 0 }, Relay)
@@ -254,6 +265,41 @@ function Relay:_allowed(address)
   return false
 end
 
+function Relay:_refill_client_ip(state)
+  local elapsed = self.now - state.at
+  if elapsed <= 0 then return end
+  -- rate >= 1, so elapsed >= burst always fills the bucket. Clamp before
+  -- multiplying to avoid signed-integer overflow after a long idle period.
+  -- Do not divide burst/rate: Yamaha integer division may truncate to zero.
+  local burst = self.cfg.query_burst_per_ip
+  if elapsed >= burst then state.tokens = burst
+  else state.tokens = math.min(burst, state.tokens + elapsed * self.cfg.query_rate_per_ip) end
+  state.at = self.now
+end
+
+function Relay:_client_ip(address)
+  local state = self.client_ips[address]
+  if state then self:_refill_client_ip(state); return state end
+  if self.client_ip_count >= self.cfg.max_client_ips then
+    -- Preserve depleted buckets across disconnects and address churn. Only
+    -- reuse an inactive, fully refilled slot; never grow the table unbounded.
+    local victim
+    for peer, candidate in pairs(self.client_ips) do
+      if candidate.connections == 0 then
+        self:_refill_client_ip(candidate)
+        if candidate.tokens == self.cfg.query_burst_per_ip then victim = peer; break end
+      end
+    end
+    if not victim then return nil end
+    self.client_ips[victim] = nil
+    self.client_ip_count = self.client_ip_count - 1
+  end
+  state = {connections = 0, tokens = self.cfg.query_burst_per_ip, at = self.now}
+  self.client_ips[address] = state
+  self.client_ip_count = self.client_ip_count + 1
+  return state
+end
+
 function Relay:_local(query)
   if self.local_names[query.canonical_name] then return true end
   for _, zone in ipairs(self.local_zones) do
@@ -312,6 +358,7 @@ function Relay:_close_client(client)
   if not self.clients[client.socket] then return end
   self.clients[client.socket] = nil
   self.client_count = self.client_count - 1
+  client.ip_state.connections = client.ip_state.connections - 1
   close(client.socket)
   local abandoned = {}
   for _, job in pairs(self.jobs) do
@@ -502,6 +549,19 @@ end
 
 function Relay:_query(client, raw)
   self:_inc("queries")
+  local state = client.ip_state
+  self:_refill_client_ip(state)
+  if state.tokens < 1 then
+    self:_inc("queries_rate_limited")
+    self:_inc("servfail")
+    -- Return one failure, then drain bounded existing work without accepting
+    -- more frames. The shared IP bucket survives this connection closing.
+    client.rate_limited, client.read_eof, client.read_deadline = true, true, nil
+    client.input = ""
+    self:_reply(client, self.wire.error_response(raw, 2))
+    return
+  end
+  state.tokens = state.tokens - 1
   local query, err = self.wire.parse_query(raw)
   if not query then
     self:_inc("rejected_queries")
@@ -569,14 +629,22 @@ function Relay:_accept()
     local address = call(socket, "getpeername")
     if not address or not self:_allowed(address) then close(socket); self:_inc("clients_denied")
     else
-      local ok = call(socket, "settimeout", 0)
-      if not ok then close(socket)
+      local state = self:_client_ip(address)
+      if not state then close(socket); self:_inc("client_ip_table_full")
+      elseif state.connections >= self.cfg.max_clients_per_ip then
+        close(socket); self:_inc("clients_connection_limited")
+      elseif state.tokens < 1 then close(socket); self:_inc("clients_rate_limited")
       else
-        self.clients[socket] = { socket = socket, address = address, input = "", output = {},
-          jobs = 0, last_activity = self.now, read_deadline = self.now + self.cfg.client_read_timeout }
-        self.client_count = self.client_count + 1
-        self:_inc("clients_accepted")
-        self.counters.peak_clients = math.max(self.counters.peak_clients or 0, self.client_count)
+        local ok = call(socket, "settimeout", 0)
+        if not ok then close(socket)
+        else
+          self.clients[socket] = { socket = socket, address = address, ip_state = state, input = "", output = {},
+            jobs = 0, last_activity = self.now, read_deadline = self.now + self.cfg.client_read_timeout }
+          state.connections = state.connections + 1
+          self.client_count = self.client_count + 1
+          self:_inc("clients_accepted")
+          self.counters.peak_clients = math.max(self.counters.peak_clients or 0, self.client_count)
+        end
       end
     end
   end
@@ -585,6 +653,7 @@ end
 
 -- Consume frames already buffered even if select reports no new network bytes.
 function Relay:_client_frames(client)
+  if client.rate_limited then return end
   for _ = 1, self.cfg.client_pipeline do
     if client.jobs + #client.output >= self.cfg.client_pipeline or #client.input < 2 then return end
     local length = string.byte(client.input, 1) * 256 + string.byte(client.input, 2)
@@ -759,6 +828,10 @@ function Relay:_timers()
       .. " pending=" .. snapshot.pending .. " clients=" .. snapshot.clients
       .. " dials=" .. (snapshot.connection_attempts or 0) .. " failures=" .. (snapshot.upstream_failures or 0)
       .. " accept_failures=" .. (snapshot.accept_failures or 0)
+      .. " ip_connections_limited=" .. (snapshot.clients_connection_limited or 0)
+      .. " ip_queries_limited=" .. (snapshot.queries_rate_limited or 0)
+      .. " ip_reconnects_limited=" .. (snapshot.clients_rate_limited or 0)
+      .. " ip_table_full=" .. (snapshot.client_ip_table_full or 0)
       .. " connections=" .. snapshot.connections .. " cache_hits=" .. (snapshot.cache_hits or 0)
       .. " cache_entries=" .. (snapshot.cache and snapshot.cache.entries or 0)
       .. " cache_bytes=" .. (snapshot.cache and snapshot.cache.bytes or 0)
@@ -837,6 +910,7 @@ function Relay:stats_snapshot()
   local result = {}
   for key, value in pairs(self.counters) do result[key] = value end
   result.clients, result.pending, result.uptime = self.client_count, self.pending, self.now - self.started
+  result.client_ips = self.client_ip_count
   result.connections, result.resource_until = self:_connection_count(), self.resource_until
   local ok, memory = pcall(collectgarbage, "count")
   if ok then result.lua_kib = memory end
@@ -869,6 +943,7 @@ function Relay:close()
   for _, ep in ipairs(self.endpoints) do close(ep.socket); ep.socket = nil end
   for _, job in pairs(self.jobs) do close(job.udp) end
   self.clients, self.jobs, self.queue = {}, {}, {}
+  self.client_ips, self.client_ip_count = {}, 0
   self.client_count, self.pending = 0, 0
 end
 
