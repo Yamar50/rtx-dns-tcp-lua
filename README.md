@@ -73,36 +73,20 @@ lua tests/test_main.lua
 lua tests/test_relay.lua
 lua tests/cache_memory.lua
 python3 -m unittest discover -s tests -p 'test_*.py'
-python3 tools/build.py --config config/example.lua --output build/rtx-dns.lua
+python3 tools/build.py --config config/release.lua --output build/release/rtx-dns.lua
 ```
 
-`make test` / `make build` も利用できます。配布版は`python3 tools/build.py --config config/release.lua --output build/release/rtx-dns.lua`または`make release`で生成します。macOSでmakeがXcodeのライセンス確認に止まる場合は、上記の直接コマンドを使用できます。RTXは整数版Luaなので、小数の数値リテラル、32bit符号付き整数を超える直接計算、標準LuaSocket前提のコードを追加しないでください。
+`make test` / `make release` も利用できます。上記のビルドは、Releaseと同じ自動設定プロファイルを使います。macOSでmakeがXcodeのライセンス確認に止まる場合は、上記の直接コマンドを使用できます。RTXは整数版Luaなので、小数の数値リテラル、32bit符号付き整数を超える直接計算、標準LuaSocket前提のコードを追加しないでください。
 
-## 手動ビルド時の設定
+## RTXのconfigからの自動設定
 
-以下は明示的な設定でビルドする場合の説明です。配布版は`config/release.lua`の`auto_config=true`により、待受・アクセス許可・ローカル登録名を自動設定します。
+配布版では`allowed_clients`、`local_dns_host`、`local_zones`などを編集する必要はありません。`dns host`から許可する端末・LANを、`ip host`・`dns static`からローカル登録名を読み取ります。内蔵DNSの問い合わせ先も自動で選びます。
 
-`config/example.lua` を `config/local.lua` にコピーして編集します。`config/local*.lua` はgit管理対象外です。
+待受は全IPv4アドレスのTCP/53です。VRRPの仮想IPは、そのルーターがMASTERになっているアドレスで利用します。アクセス許可はRTX側の`dns host`に従います。
 
-| 設定 | 意味 |
-|---|---|
-| `auto_config` | `true`なら起動時にRTXのDNSアクセス許可・ローカル登録名を読み取り、TCP/53で開始。配布版で使用 |
-| `listen_host`, `listen_port` | RTX側の待受IPv4アドレス・ポート。試験は53053、内蔵UDP DNSをTCPで補完するときは53 |
-| `allowed_clients` | 利用を許可するIPv4アドレスまたはCIDRの配列。明示必須 |
-| `dns_config` | 通常は指定不要。試験用に`"static"`を指定した場合だけ稼働中configの自動読込を省略する。旧`"running"`指定も互換として受け付ける |
-| `upstreams` | `dns_config="static"`の試験用固定設定で使う上流IPv4アドレス・TCPポート。1～2台 |
-| `max_upstream_connections` | 全規則で共有する接続上限。既定は規則読込時4本、固定設定2本。明示指定は1～16本、実機検証は4本 |
-| `policy_id` | 固定設定のキャッシュ識別子。規則読込時は規則番号に基づき自動設定 |
-| `local_dns_host`, `local_dns_port` | 内蔵UDP DNSのIPv4アドレス・ポート |
-| `local_zones` | 手動設定で内蔵DNSへ戻すゾーン。ラベル境界で一致し、子孫も対象。配布版では手動指定不要 |
-| `local_names` | 内蔵DNSへ戻す登録名の完全一致リスト。配布版ではRTXの静的登録から自動取得 |
-| `cache_entries`, `cache_bytes`, `cache_ttl_fields` | 初期値256、1048576、4096。entries=0で保存を無効化 |
-| `duration` | 実行秒数。設定例は有限時間。省略すると明示的に停止するまで実行 |
-| `console_log`, `syslog` | コンソール・syslogへの出力。設定例ではsyslogを無効化 |
+配布版は起動時に、`rt.command("show config")` の結果を読みます。`dns service recursive`ならDNSの転送規則を使い、`dns service off`なら起動を中止してTCP待受を開始しません。サービス指定の省略時は、RTXの既定値に従いrecursiveとして扱います。**`dns server`や`dns server select`などのDNS設定を変更した後は、このLuaスクリプトを再起動してください。起動スケジュールを登録済みであれば、変更したconfigを`save`してRTX本体を再起動する方法でも反映されます。稼働中のLuaはDNS設定を自動再読込しません。**
 
-通常はLua側のモード指定なしで、`rt.command("show config")` の結果を読みます。`dns service recursive`ならDNSの転送規則を使い、`dns service off`なら起動を中止してTCP待受を開始しません。サービス指定の省略時は、RTXの既定値に従いrecursiveとして扱います。**`dns server`や`dns server select`などのDNS設定を変更した後は、このLuaスクリプトを再起動してください。起動スケジュールを登録済みであれば、変更したconfigを`save`してRTX本体を再起動する方法でも反映されます。稼働中のLuaはDNS設定を自動再読込しません。**
-
-設定全体をログへ出力せず、ルーターのconfigを変更しません。固定上流で過去の試験を再現するときだけ、`dns_config="static"`を明示して`upstreams`を使います。通常の自動設定では`upstreams`を使いません。
+設定全体をログへ出力せず、ルーターのconfigを変更しません。
 
 対応するのは静的IPv4の `dns server select`（1規則につき1〜2台）と、未一致時の `dns server`（最大4候補）です。小さい規則番号から最初に一致した規則を使い、その上流が失敗しても後続規則へ切り替えません。元クライアントの送信元IPv4を使い、単一IP・CIDR・開始IP～終了IP、通常のタイプ指定、`any`、PTRのIPv4/CIDR、`edns=on/off`を扱います。EDNS省略時はヤマハの既定どおりoffです。
 
@@ -110,67 +94,9 @@ python3 tools/build.py --config config/example.lua --output build/rtx-dns.lua
 
 `select ... reject` は該当する問い合わせを破棄します。PP/DHCPからの動的上流取得、`restrict pp`、NAT46、IPv6上流、`reject ptr`などの未対応構文を検出すると、設定全体の読み込みを失敗させて起動しません。最大256規則・異なる上流宛先16個までです。
 
-配布版はRTXの静的登録名を起動時に読み取り、その名前への問い合わせを内蔵UDP DNSに渡します。親ドメインや子孫の名前までローカル扱いにはしません。手動ビルドでは`local_zones`を使う従来の設定も可能です。ホスト名とIPの対応をLuaに複製して応答する処理は行いません。
+配布版はRTXの静的登録名を起動時に読み取り、その名前への問い合わせを内蔵UDP DNSに渡します。親ドメインや子孫の名前までローカル扱いにはしません。ホスト名とIPの対応をLuaに複製して応答する処理は行いません。
 
-LANで使う場合は、少なくとも次の設定を実際の環境に合わせて編集します。`192.0.2.0/24` は説明用のアドレスで、そのまま使用する値ではありません。
-
-```lua
-return {
-  listen_host = "0.0.0.0", listen_port = 53,
-  allowed_clients = { "192.0.2.0/24" },
-  local_dns_host = "127.0.0.1", local_dns_port = 53,
-  local_zones = { "home.arpa", "2.0.192.in-addr.arpa" },
-  cache_entries = 256, cache_bytes = 1048576, cache_ttl_fields = 4096,
-  stats_interval = 60,
-  console_log = false, syslog = true
-}
-```
-
-`0.0.0.0` はルーターが受信するIPv4アドレスで待ち受けます。VRRPの仮想IPについては、そのルーターがMASTERになっているアドレスで利用します。`allowed_clients` は利用するLANに限定してください。内蔵DNSにもループバックから問い合わせ可能な設定が必要です。
-
-## RTXでの一時実行
-
-設定をビルドし、生成物1ファイルだけをルーターへ提供します。次のIPは説明用です。配布ホストを`192.0.2.10`、ルーターを`192.0.2.1`として記述しています。実際のアドレスに置き換えてください。
-
-```sh
-python3 tools/build.py --config config/local.lua --output build/rtx-dns.lua
-python3 tools/serve_artifact.py --file build/rtx-dns.lua \
-  --bind 192.0.2.10 --allow 192.0.2.1 --port 18880 --duration 120
-```
-
-RTXの管理者コンソールから実行します。
-
-```text
-lua -e 'local r=rt.httprequest({url="http://192.0.2.10:18880/artifact.lua",method="GET"}); assert(r.body); local f,e=loadstring(r.body); assert(f,e); f()'
-```
-
-この方法ではルーター上のファイル保存・設定のsave・自動起動追加を行いません。配布サーバーは指定ファイルを起動時に読み込み、指定ルーターからの `/artifact.lua` だけを提供し、指定時間後に終了します。LAN内HTTPでコードを取得するため、管理下の経路で使用してください。常設時は、確認した生成物をルーターのLua保存領域へ配置する運用に切り替えてください。
-
-`show status lua` で今回のタスクIDを確認し、必要なら `terminate lua <ID>` でそのタスクだけを停止します。既存のLuaタスクをまとめて停止しないでください。有限時間で起動した場合は自動終了します。
-
-試験用ポートへの問い合わせ例：
-
-```sh
-dig -b 192.0.2.10 @192.0.2.1 -p 53053 router01.home.arpa A +tcp
-```
-
-TCP/53に配置した場合は `-p 53053` を外します。家庭内DNSの回答がUDP側でも切り詰められる場合、このローカル転送経路では回答を大きくできません。
-
-## 常設と自動起動
-
-有限時間の試験で動作を確認してから、`duration`を省略して再ビルドします。生成物をRTXのファイルシステムへ転送し、たとえば`/lua/rtx-dns.lua`に保存します。ファイル転送・保存は [Yamaha RTFSの説明](https://www.rtpro.yamaha.co.jp/RT/docs/rtfs/index.html) を参照してください。
-
-管理者コンソールで実行し、動作確認後に未使用のスケジュール番号を選んで登録します。以下の`10`は例です。
-
-```text
-lua /lua/rtx-dns.lua
-schedule at 10 startup * lua /lua/rtx-dns.lua
-save
-```
-
-DNS設定を変更した場合は、`show status lua`で対象のタスクIDを確認し、`terminate lua <ID>`で停止してから再実行します。スクリプトだけの再起動でDNS設定を読み直せるため、RTX本体の再起動は必須ではありません。起動スケジュールを登録済みの場合は、設定を`save`してRTX本体を再起動しても反映されます。停止せずに重複起動しないでください。ログは`show log reverse`で`DNSRELAY`を確認します。
-
-常設を解除する場合は、登録した番号の`no schedule at 10`と`save`を実行し、対象タスクを停止します。[起動スケジュールの公式仕様](https://www.rtpro.yamaha.co.jp/RT/manual/rt-common/schedule/schedule_at.html)
+開発・検証のために手動設定を使う場合の手順は、[開発・検証用の手動設定と一時実行](docs/development.md)にまとめています。通常の導入には不要です。
 
 ## 対応範囲と制限
 
@@ -186,7 +112,7 @@ DNS設定を変更した場合は、`show status lua`で対象のタスクIDを�
 
 - `src/`：DNS wire処理、キャッシュ、DNS選択規則、TCPリレー、起動処理。
 - `config/release.lua`：転送・起動だけで利用する配布版の自動設定プロファイル。
-- `config/example.lua`：ループバック限定・120秒の試験設定。
+- `config/example.lua`：開発・検証専用のループバック限定・120秒の手動設定。
 - `tools/build.py`：単一Luaファイルへの結合。
 - `tools/serve_artifact.py`：生成物1ファイルの一時配布。
 - `tests/`：単体テスト、合成DNSサーバー、負荷・障害試験用ハーネス。
