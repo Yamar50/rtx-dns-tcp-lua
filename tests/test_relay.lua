@@ -205,7 +205,7 @@ function tests.routing_configuration_cannot_trigger_hostname_resolution()
 end
 function tests.persistent_connection_over_4000()
   local env = mock()
-  local r = relay(env)
+  local r = relay(env, { query_rate_per_ip = 1000, query_burst_per_ip = 1000 })
   local c = env.client()
   steps(r, 1)
   for n = 1, 4100 do
@@ -245,7 +245,7 @@ end
 
 function tests.primary_full_does_not_open_secondary()
   local env = mock({ respond = function() end })
-  local r = relay(env)
+  local r = relay(env, { max_clients_per_ip = 32 })
   for n = 1, 8 do env.client(query(n)) end
   until_true(r, function() return env.upstream_queries == 4 end)
   eq(#env.tcp_dials, 1)
@@ -259,7 +259,7 @@ function tests.resource_freeze_cache_and_local_continue()
   local cached = query(55, "cached.test.")
   local cache = { get = function(_, q) if q.name == "cached.test." then return answer(q.raw) end end,
     put = function() end }
-  local r = relay(env, nil, cache)
+  local r = relay(env, { query_rate_per_ip = 1000, query_burst_per_ip = 1000 }, cache)
   local c = env.client(query(1))
   until_true(r, function() return #c.output > 0 end)
   eq(#env.tcp_dials, 1)
@@ -373,7 +373,7 @@ end
 
 function tests.bounds_and_abandoned_client_correlation()
   local env = mock({ respond = function() end })
-  local r = relay(env)
+  local r = relay(env, { max_clients_per_ip = 32 })
   local clients = {}
   for n = 1, 33 do clients[n] = env.client(query(n)) end
   until_true(r, function() return r.pending == 32 and env.upstream_queries == 4 end)
@@ -434,7 +434,7 @@ function tests.cache_hit_when_all_pending_slots_occupied()
   local env = mock({ respond = function() end })
   local cache = { get = function(_, q) if q.name == "cached.test." then return answer(q.raw) end end,
     put = function() end }
-  local r = relay(env, nil, cache)
+  local r = relay(env, { max_clients_per_ip = 32 }, cache)
   local clients = {}
   for n = 1, 32 do clients[n] = env.client(query(n)) end
   until_true(r, function() return r.pending == 32 end)
@@ -448,7 +448,7 @@ end
 function tests.resource_recovery_probe_only_one_and_reset_requires_response()
   local env = mock({ connect_mode = function(_, n) return n == 1 and "resource" or "pending" end,
     respond = function() end })
-  local r = relay(env)
+  local r = relay(env, { max_clients_per_ip = 32 })
   local failed = env.client(query(1))
   until_true(r, function() return #failed.output > 0 end)
   env.time = r.resource_until + 0.1
@@ -774,7 +774,8 @@ function tests.policy_connection_cap_queues_busy_and_evicts_only_idle()
     upstreams = { { host = "198.18.32." .. (29+n), port = 15353 } } } end
   local policy = route_policy(routes, function(q) return routes[tonumber(string.match(q.name, "^route(%d)"))] end)
   local env = mock({ respond = function() end })
-  local r = relay(env, { dns_policy = policy, response_timeout = 20, total_timeout = 30 })
+  local r = relay(env, { dns_policy = policy, response_timeout = 20, total_timeout = 30,
+    max_clients_per_ip = 32 })
   for n = 1, 5 do env.client(query(330+n, "route" .. n .. ".test.")) end
   until_true(r, function() return env.upstream_queries == 4 end)
   eq(r.cfg.max_upstream_connections, 4)
@@ -982,6 +983,212 @@ function tests.dns_host_ranges_compare_octets_and_include_both_boundaries()
   local allowed = env.client(query(906), "198.18.2.10")
   until_true(r, function() return denied.closed and #allowed.output > 0 end)
   eq(env.upstream_queries, 1, "rejected client cannot create an upstream query")
+  r:close()
+end
+
+function tests.per_ip_limits_reject_invalid_configuration_before_listen()
+  for _, entry in ipairs({
+    { "max_clients_per_ip", 0 }, { "max_clients_per_ip", 33 }, { "max_clients_per_ip", 1.5 },
+    { "query_rate_per_ip", 0 }, { "query_rate_per_ip", 1001 }, { "query_rate_per_ip", "20" },
+    { "query_burst_per_ip", 0 }, { "query_burst_per_ip", 1001 }, { "query_burst_per_ip", 1.5 },
+    { "max_client_ips", 0 }, { "max_client_ips", 4097 }, { "max_client_ips", 1.5 },
+    { "max_client_ips", 31 }
+  }) do
+    local env = mock()
+    local config = {}; config[entry[1]] = entry[2]
+    eq(pcall(relay, env, config), false, "invalid " .. entry[1] .. " rejected")
+    eq(env.tcp_created, 0, "invalid limiter configuration opens no socket")
+  end
+end
+
+function tests.default_per_ip_connection_limit_preserves_other_sources()
+  local env = mock(); env.select_advance = 0
+  local r, clients = relay(env), {}
+  for n = 1, 5 do clients[n] = env.client(query(1000 + n)) end
+  local other = env.client(query(1006), "198.18.32.31")
+  until_true(r, function() return clients[5].closed and #other.output > 0 end)
+  for n = 1, 4 do
+    until_true(r, function() return #clients[n].output > 0 end)
+    eq(clients[n].output, frame(answer(query(1000 + n))))
+  end
+  eq(clients[5].output, "", "excess TCP connection is rejected before query parsing")
+  eq(other.output, frame(answer(query(1006))))
+  eq(r.client_count, 5, "four connections for first IP and one for second")
+  clients[1].eof = true
+  until_true(r, function() return clients[1].closed end)
+  local replacement = env.client(query(1007))
+  until_true(r, function() return #replacement.output > 0 end)
+  eq(replacement.output, frame(answer(query(1007))), "closed connection returns its IP slot")
+  r:close()
+end
+
+function tests.default_query_bucket_allows_40_then_refills_20_per_second()
+  local env = mock(); env.select_advance = 0
+  local r = relay(env)
+  local c = env.client()
+  for n = 1, 40 do
+    c.input = frame(query(1100 + n))
+    until_true(r, function() return #c.output > 0 end)
+    eq(c.output, frame(answer(query(1100 + n))))
+    c.output = ""
+  end
+  c.input = frame(query(1141)) .. frame(query(1142))
+  until_true(r, function() return c.closed end)
+  eq(c.output, frame(wire.error_response(query(1141), 2)), "one SERVFAIL, buffered follow-up ignored")
+  eq(env.upstream_queries, 40)
+  local early = env.client(query(1143))
+  until_true(r, function() return early.closed end)
+  eq(early.output, "", "reconnect cannot reset exhausted IP bucket")
+  env.time = 1
+  local recovered = env.client()
+  for n = 1, 20 do
+    recovered.input = frame(query(1200 + n))
+    until_true(r, function() return #recovered.output > 0 end)
+    eq(recovered.output, frame(answer(query(1200 + n))))
+    recovered.output = ""
+  end
+  recovered.input = frame(query(1221))
+  until_true(r, function() return recovered.closed end)
+  eq(recovered.output, frame(wire.error_response(query(1221), 2)))
+  eq(env.upstream_queries, 60, "one second restores exactly twenty queries")
+  r:close()
+end
+
+function tests.query_bucket_is_shared_across_connections_but_not_addresses()
+  local env = mock(); env.select_advance = 0
+  local r = relay(env, { query_rate_per_ip = 1, query_burst_per_ip = 3 })
+  local clients = {}
+  for n = 1, 3 do clients[n] = env.client() end
+  steps(r, 1)
+  for n, c in ipairs(clients) do
+    c.input = frame(query(1300 + n))
+    until_true(r, function() return #c.output > 0 end)
+    eq(c.output, frame(answer(query(1300 + n))))
+    c.output = ""
+  end
+  clients[1].input = frame(query(1304))
+  until_true(r, function() return clients[1].closed end)
+  eq(clients[1].output, frame(wire.error_response(query(1304), 2)))
+  clients[2].input = frame(query(1305))
+  until_true(r, function() return clients[2].closed end)
+  eq(clients[2].output, frame(wire.error_response(query(1305), 2)))
+  local other = env.client(query(1306), "198.18.32.31")
+  until_true(r, function() return #other.output > 0 end)
+  eq(other.output, frame(answer(query(1306))), "another IP keeps an independent bucket")
+  eq(env.upstream_queries, 4)
+  r:close()
+end
+
+function tests.query_limit_counts_malformed_cached_and_local_requests()
+  for _, kind in ipairs({ "malformed", "cached", "local" }) do
+    local env = mock(); env.select_advance = 0
+    local lookups = 0
+    local cache = { get = function(_, q) lookups = lookups + 1; return answer(q.raw) end }
+    local r = relay(env, { query_rate_per_ip = 1, query_burst_per_ip = 1 }, kind == "cached" and cache or nil)
+    local first = kind == "malformed" and u16(1401) .. "Xinvalid.test."
+      or query(1401, kind == "local" and "router01.is.example.test." or "cached.test.")
+    local c = env.client(first)
+    until_true(r, function() return #c.output > 0 end)
+    eq(c.output, frame(kind == "malformed" and wire.error_response(first, 1) or answer(first)))
+    c.output, c.input = "", frame(query(1402))
+    until_true(r, function() return c.closed end)
+    eq(c.output, frame(wire.error_response(query(1402), 2)), kind .. " consumed the IP token")
+    eq(env.upstream_queries, 0, "rate rejection creates no upstream work")
+    eq(lookups, kind == "cached" and 1 or 0, "rate rejection bypasses cache lookup")
+    eq(env.udp_count, kind == "local" and 1 or 0, "rate rejection creates no native DNS work")
+    r:close()
+  end
+end
+
+function tests.rate_rejection_drains_existing_jobs_and_output_before_close()
+  local held
+  local env = mock({ send_chunk = 5, respond = function(socket, request)
+    held = { socket = socket, request = request }
+  end }); env.select_advance = 0
+  local r = relay(env, { query_rate_per_ip = 1, query_burst_per_ip = 1 })
+  local c = env.client(query(1501))
+  c.input = c.input .. frame(query(1502)) .. frame(query(1503))
+  until_true(r, function() return held and #c.output == #frame(wire.error_response(query(1502), 2)) end)
+  eq(c.closed, nil, "pending accepted job survives rate rejection")
+  eq(env.upstream_queries, 1, "buffered query after rate failure is ignored")
+  c.input = frame(query(1504))
+  held.socket.input = frame(answer(held.request))
+  until_true(r, function() return c.closed end)
+  eq(c.output, frame(wire.error_response(query(1502), 2)) .. frame(answer(query(1501))),
+    "one SERVFAIL and original pending answer are both delivered with partial writes")
+  eq(env.upstream_queries, 1, "new input after rejection is not processed")
+  r:close()
+end
+
+function tests.rate_rejection_output_deadline_still_closes_stalled_client()
+  local env = mock({ send_chunk = 1 }); env.select_advance = 0
+  local cache = { get = function(_, q) return answer(q.raw) end }
+  local r = relay(env, { query_rate_per_ip = 1, query_burst_per_ip = 1 }, cache)
+  local c = env.client(query(1601))
+  c.input = c.input .. frame(query(1602))
+  until_true(r, function() return #c.output > 0 end)
+  eq(c.closed, nil)
+  env.time = 2
+  steps(r, 1)
+  eq(c.closed, true, "rate-limit drain retains hard output deadline")
+  eq(env.upstream_queries, 0)
+  r:close()
+end
+
+function tests.tracked_ip_capacity_cannot_reset_recently_exhausted_buckets()
+  local env = mock(); env.select_advance = 0
+  local r = relay(env, { max_clients = 2, max_client_ips = 2, query_rate_per_ip = 1, query_burst_per_ip = 1 })
+  for n = 1, 2 do
+    local c = env.client(query(1700 + n), "198.18.32." .. (40 + n)); c.eof = true
+    until_true(r, function() return c.closed end)
+    eq(c.output, frame(answer(query(1700 + n))))
+  end
+  local excess = env.client(query(1703), "198.18.32.43")
+  until_true(r, function() return excess.closed end)
+  eq(excess.output, "", "full unrecovered tracking table rejects a new IP")
+  local retry = env.client(query(1704), "198.18.32.41")
+  until_true(r, function() return retry.closed end)
+  eq(retry.output, "", "denied new IP did not erase an exhausted source")
+  eq(env.upstream_queries, 2)
+  env.time = 1
+  local fresh = env.client(query(1705), "198.18.32.43")
+  until_true(r, function() return #fresh.output > 0 end)
+  eq(fresh.output, frame(answer(query(1705))), "recovered disconnected source can be reclaimed")
+  r:close()
+end
+
+function tests.tracked_ip_reclamation_keeps_active_connection_state()
+  local env = mock(); env.select_advance = 0
+  local r = relay(env, { max_clients = 2, max_client_ips = 2, query_rate_per_ip = 1, query_burst_per_ip = 1 })
+  local active = env.client(query(1801), "198.18.32.41")
+  local closed = env.client(query(1802), "198.18.32.42"); closed.eof = true
+  until_true(r, function() return #active.output > 0 and closed.closed end)
+  env.time = 1
+  local newcomer = env.client(query(1803), "198.18.32.43")
+  until_true(r, function() return #newcomer.output > 0 end)
+  eq(newcomer.output, frame(answer(query(1803))))
+  active.output, active.input = "", frame(query(1804))
+  until_true(r, function() return #active.output > 0 end)
+  eq(active.output, frame(answer(query(1804))), "live source survives tracking-table reclamation")
+  eq(r.client_count, 2)
+  r:close()
+end
+
+function tests.query_bucket_handles_rate_above_burst_and_large_clock_jump()
+  local env = mock(); env.select_advance = 0
+  local r = relay(env, { query_rate_per_ip = 1000, query_burst_per_ip = 1 })
+  local c = env.client(query(1901))
+  until_true(r, function() return #c.output > 0 end)
+  c.output, c.input = "", frame(query(1902))
+  until_true(r, function() return c.closed end)
+  eq(c.output, frame(wire.error_response(query(1902), 2)), "integer division must not refill at zero elapsed time")
+  env.time = 1000000000
+  local recovered = env.client(query(1903))
+  until_true(r, function() return #recovered.output > 0 end)
+  eq(recovered.output, frame(answer(query(1903))), "large elapsed time refills without multiplication overflow")
+  recovered.output, recovered.input = "", frame(query(1904))
+  until_true(r, function() return recovered.closed end)
+  eq(recovered.output, frame(wire.error_response(query(1904), 2)), "refill never exceeds burst capacity")
   r:close()
 end
 
