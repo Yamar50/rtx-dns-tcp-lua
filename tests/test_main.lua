@@ -1,0 +1,179 @@
+package.path = 'src/?.lua;' .. package.path
+local main = require('main')
+local count = 0
+local function check(value, label)
+  count = count + 1
+  assert(value, 'check ' .. count .. ': ' .. (label or ''))
+end
+
+local secret = 'secret-never-retained'
+local routes = 'dns server select 10 192.0.2.1 any .\n'
+local unrelated = 'administrator password ' .. secret .. '\n'
+local function contains_secret(value, seen)
+  if type(value) == 'string' then return value:find(secret, 1, true) ~= nil end
+  if type(value) ~= 'table' then return false end
+  seen = seen or {}
+  if seen[value] then return false end
+  seen[value] = true
+  for key, item in pairs(value) do
+    if contains_secret(key, seen) or contains_secret(item, seen) then return true end
+  end
+  return false
+end
+
+local function reader(text)
+  local calls = {command = 0, socket = 0}
+  local runtime = {command = function(command)
+    calls.command = calls.command + 1
+    check(command == 'show config', 'one running config command')
+    return true, text
+  end, socket = {tcp = function() calls.socket = calls.socket + 1 end}}
+  return runtime, calls
+end
+
+local function accepted_service(text, label, config)
+  local runtime, calls = reader(unrelated .. text .. '\n' .. routes)
+  local policy, err = main.read_policy(config or {}, runtime)
+  check(policy and not err and #policy.routes == 1, label)
+  check(policy.routes[1].upstreams[1].host == '192.0.2.1', label .. ' route')
+  check(calls.command == 1 and calls.socket == 0, label .. ' reads once without sockets')
+  check(not contains_secret(policy), label .. ' keeps only parsed descriptors')
+end
+
+accepted_service('', 'omitted service defaults to recursive')
+accepted_service('dns service recursive', 'explicit recursive')
+accepted_service('dns service recursive', 'legacy running option', {dns_config = 'running'})
+accepted_service(' \tdns\tservice  recursive \t\r\n', 'whitespace and CRLF')
+accepted_service('# dns service off\r\n\n  dns service recursive\r\n', 'comments do not disable DNS')
+accepted_service('# dns service off\r\n', 'commented service still defaults to recursive')
+accepted_service('dns service aaaa filter on', 'separate aaaa command is not a service mode')
+accepted_service('dns service aaaa filter off\ndns service recursive', 'aaaa command with explicit mode')
+
+-- Test-only static and internally injected policies do not inspect the router.
+local runtime, calls = reader(unrelated .. 'dns service off\n' .. routes)
+local policy, err = main.read_policy({dns_config = 'static'}, runtime)
+check(policy == nil and err == nil and calls.command == 0, 'static explicitly skips config read')
+policy, err = main.read_policy({dns_config = 'static'}, {})
+check(policy == nil and err == nil, 'static needs no command API')
+local injected = {routes = {}}
+policy, err = main.read_policy({dns_policy = injected}, runtime)
+check(policy == injected and err == nil and calls.command == 0, 'injected policy skips config read')
+policy, err = main.read_policy({dns_policy = injected}, {})
+check(policy == injected and err == nil, 'injected policy needs no command API')
+for _, mode in ipairs({'typo', '', true, 1}) do
+  policy, err = main.read_policy({dns_config = mode}, runtime)
+  check(policy == nil and type(err) == 'string' and calls.command == 0,
+    'invalid dns_config is rejected before read')
+end
+
+local function rejected_start(runtime, label, expected_error)
+  local sockets = 0
+  runtime.socket = {tcp = function() sockets = sockets + 1 end}
+  local ok, result = pcall(main.start, {console_log = false, syslog = false}, runtime)
+  check(not ok and type(result) == 'string', label .. ' rejects startup')
+  check(sockets == 0, label .. ' creates no sockets')
+  check(not contains_secret(result), label .. ' startup error keeps secrets private')
+  if expected_error then check(result:find(expected_error, 1, true) ~= nil, label .. ' startup reason') end
+end
+
+local function rejected_config(text, label, expected_error)
+  local runtime, calls = reader(unrelated .. text)
+  local policy, err = main.read_policy({}, runtime)
+  check(policy == nil and type(err) == 'string', label .. ' read failure')
+  check(not contains_secret(err), label .. ' read error keeps secrets private')
+  if expected_error then check(err == expected_error, label .. ' exact reason') end
+  check(calls.command == 1 and calls.socket == 0, label .. ' read creates no sockets')
+  rejected_start(runtime, label, expected_error)
+  check(calls.command == 2, label .. ' one config snapshot per start')
+end
+
+rejected_config('dns service off\n' .. routes, 'explicit service off', 'dns service is off')
+rejected_config(' \tdns  service\toff \r\n', 'off with no routes', 'dns service is off')
+rejected_config('dns service off # disabled\r\n' .. routes, 'unsupported inline off comment')
+for _, case in ipairs({
+  {'dns service recursive\ndns service recursive', 'duplicate recursive'},
+  {'dns service recursive\ndns service off', 'conflicting service modes'},
+  {'dns service off\ndns service recursive', 'conflicting reverse order'},
+  {'dns service off\ndns service off', 'duplicate off'},
+  {'dns service', 'missing service mode'},
+  {'dns service forwarding', 'unsupported service mode'},
+  {'dns service recursive extra', 'extra recursive argument'},
+  {'dns service recursive # enabled', 'unsupported inline recursive comment'},
+  {'dns service off extra', 'extra off argument'},
+  {'no dns service', 'negated service'},
+  {'no dns service recursive', 'negated explicit mode'},
+  {'no dns service off', 'negated off mode'},
+}) do
+  rejected_config(case[1] .. '\n' .. routes, case[2])
+end
+rejected_config('dns service recursive\ndns server select 10 dhcp lan1 any .', 'unsupported dynamic route')
+rejected_config('dns service recursive\ndns server select 10 ' .. secret .. ' any .', 'malformed route with secret')
+rejected_config('dns service recursive\n', 'recursive without any route')
+
+for _, failure in ipairs({'missing', 'failure', 'throw', 'no_text', 'non_text'}) do
+  local runtime = {}
+  if failure ~= 'missing' then
+    runtime.command = function()
+      if failure == 'throw' then error(secret) end
+      if failure == 'failure' then return false, secret end
+      if failure == 'no_text' then return true end
+      return true, {password = secret}
+    end
+  end
+  local policy, err = main.read_policy({}, runtime)
+  check(policy == nil and type(err) == 'string', failure .. ' config API is rejected')
+  check(not contains_secret(err), failure .. ' read error keeps secrets private')
+  rejected_start(runtime, failure .. ' config API')
+end
+
+-- Exercise the real entrypoint logger without opening a socket. Long-running
+-- counters and stopped summaries can exceed Yamaha's SYSLOG message limit.
+local Relay = require('relay')
+local original_new, original_print = Relay.new, print
+local messages = {
+  '', 'DNSRELAY short', string.rep('x', 230), string.rep('x', 231),
+  string.rep('x', 232), string.rep('x', 444), string.rep('x', 5000),
+  string.rep(string.char(130, 160), 240),
+  'DNSRELAY stats queries=1000000 responses=1000000 pending=32 clients=32 dials=1234 failures=123 accept_failures=123 connections=4 cache_hits=1000000 cache_entries=256 cache_bytes=1048576 cache_ttl_fields=4096 lua_kib=1234 uptime=1000000'
+}
+local console, sent = {}, {}
+local summary = {long_counter = string.rep('9', 500)}
+Relay.new = function(_config, _socket, log)
+  return {
+    run = function()
+      for _, message in ipairs(messages) do log(message) end
+      return summary
+    end,
+    close = function() end
+  }
+end
+print = function(message) console[#console + 1] = message end
+local logging_ok, logging_error = pcall(main.start, {dns_config = 'static'}, {
+  socket = {}, syslog = function(level, message)
+    check(level == 'info', 'SYSLOG level remains info')
+    check(#message <= 231, 'every SYSLOG record fits the Yamaha limit')
+    sent[#sent + 1] = message
+    return true
+  end
+})
+Relay.new, print = original_new, original_print
+check(logging_ok, 'logging start succeeds: ' .. tostring(logging_error))
+messages[#messages + 1] = 'DNSRELAY stopped long_counter=' .. summary.long_counter .. ' reason=duration'
+check(#console == #messages, 'console emits one full record per message')
+local at, continuation = 1, 'DNSRELAY continued '
+for index, message in ipairs(messages) do
+  check(console[index] == message, 'console keeps original message ' .. index)
+  local rebuilt = sent[at]
+  at = at + 1
+  while #rebuilt < #message do
+    local record = sent[at]
+    check(record and record:sub(1, #continuation) == continuation,
+      'continuation identifies DNSRELAY ' .. index)
+    rebuilt = rebuilt .. record:sub(#continuation + 1)
+    at = at + 1
+  end
+  check(rebuilt == message, 'SYSLOG chunks preserve every byte ' .. index)
+end
+check(at == #sent + 1, 'no missing or extra SYSLOG records')
+
+print('main policy and logging checks passed: ' .. count)

@@ -1,0 +1,961 @@
+package.path = "./src/?.lua;" .. package.path
+local Relay = require("relay")
+
+local function eq(actual, expected, message)
+  assert(actual == expected, (message or "not equal") .. ": expected " .. tostring(expected) .. ", got " .. tostring(actual))
+end
+local function u16(n) return string.char((n - n % 256) / 256, n % 256) end
+local function id(raw) return string.byte(raw, 1) * 256 + string.byte(raw, 2) end
+local function frame(raw) return u16(#raw) .. raw end
+local function query(n, name) return u16(n) .. "Q" .. (name or "example.test.") end
+local function answer(raw) return string.sub(raw, 1, 2) .. "R" .. string.sub(raw, 4) end
+local function canonical_name(name)
+  local parts = {}
+  for label in string.gmatch(string.lower(name), "[^.]+") do
+    if #label > 63 then return "" end -- Maximum-frame tests use an intentionally synthetic wire module.
+    parts[#parts + 1] = string.char(#label) .. label
+  end
+  return table.concat(parts) .. "\0"
+end
+local wire = {
+  frame = frame,
+  upstream_query = function(q, _server) return q.raw end,
+  downstream_response = function(raw, _q, _server) return raw end,
+  with_id = function(raw, value) return u16(value) .. string.sub(raw, 3) end,
+  parse_query = function(raw)
+    if string.sub(raw, 3, 3) ~= "Q" then return nil, "invalid" end
+    return { raw = raw, id = id(raw), name = string.sub(raw, 4), retryable = true,
+      canonical_name = canonical_name(string.sub(raw, 4)) }
+  end,
+  validate_response = function(raw, q, expected)
+    return id(raw) == expected and string.sub(raw, 3, 3) == "R" and string.sub(raw, 4) == q.name
+  end,
+  error_response = function(q, rcode)
+    return u16(type(q) == "table" and q.id or id(q)) .. "E" .. tostring(rcode) .. string.rep("!", 8)
+  end
+}
+
+local function mock(options)
+  options = options or {}
+  local env = { time = 0, sockets = {}, tcp_created = 0, upstream_queries = 0,
+    tcp_dials = {}, upstream_requests = {}, pending_accept = {}, accept_failures = {}, udp_count = 0, last_writers = {}, logs = {} }
+  local methods = {}
+  function methods:settimeout(_) return 1 end
+  function methods:bind(host, port) self.host, self.port = host, port; return 1 end
+  function methods:listen(_) self.kind = "listener"; return 1 end
+  function methods:getpeername()
+    if self.kind == "client" then return self.peer or "198.18.32.30", 41000 end
+    if self.connected then return self.host, self.port end
+    return nil, "getpeername failed"
+  end
+  function methods:accept()
+    if env.accept_error then
+      env.accept_failures[#env.accept_failures + 1] = env.time
+      return nil, env.accept_error
+    end
+    if #env.pending_accept == 0 then return nil, "timeout" end
+    return table.remove(env.pending_accept, 1)
+  end
+  function methods:connect(host, port)
+    self.host, self.port, self.kind = host, port, "upstream"
+    env.tcp_dials[#env.tcp_dials + 1] = env.time
+    self.mode = options.connect_mode and options.connect_mode(self, #env.tcp_dials) or "pending"
+    if self.mode == "resource" then return nil, "Can't assign requested address" end
+    if self.mode == "immediate" then self.connected = true; return 1 end
+    return nil, "timeout"
+  end
+  function methods:close() self.closed = true; self.close_count = (self.close_count or 0) + 1; return 1 end
+  function methods:receive(n)
+    local amount = math.min(n, #self.input, options.read_chunk or n)
+    local part = string.sub(self.input, 1, amount)
+    self.input = string.sub(self.input, amount + 1)
+    if amount == n then return part end
+    return nil, self.eof and #self.input == 0 and "closed" or "timeout", part
+  end
+  function methods:send(raw, first)
+    first = first or 1
+    local last = math.min(#raw, first + (options.send_chunk or #raw) - 1)
+    local part = string.sub(raw, first, last)
+    self.output = self.output .. part
+    if self.kind == "upstream" then
+      self.server_input = self.server_input .. part
+      while #self.server_input >= 2 do
+        local length = id(self.server_input)
+        if #self.server_input < length + 2 then break end
+        local request = string.sub(self.server_input, 3, length + 2)
+        self.server_input = string.sub(self.server_input, length + 3)
+        env.upstream_queries = env.upstream_queries + 1
+        env.upstream_requests[#env.upstream_requests + 1] = { host = self.host, port = self.port, raw = request }
+        if options.respond then options.respond(self, request, env)
+        else self.input = self.input .. frame(answer(request)) end
+      end
+    end
+    if last < #raw then return nil, "timeout", last end
+    return last
+  end
+  function methods:sendto(raw, host, port)
+    self.udp_response, self.remote_host, self.remote_port = answer(raw), host, port
+    env.udp_count = env.udp_count + 1
+    return #raw
+  end
+  function methods:receivefrom(_)
+    local response = self.udp_response
+    self.udp_response = nil
+    if response then return response, self.remote_host, self.remote_port end
+    return nil, "timeout"
+  end
+  local function socket(kind)
+    local s = setmetatable({ kind = kind, input = "", output = "", server_input = "" }, { __index = methods })
+    env.sockets[#env.sockets + 1] = s
+    return s
+  end
+  env.api = {
+    gettime = function() return env.time end,
+    tcp = function()
+      env.tcp_created = env.tcp_created + 1
+      if env.tcp_created > 1 and options.tcp_allocation_error then return nil, "socket allocation failed" end
+      return socket("new")
+    end,
+    udp = function() return socket("udp") end,
+    select = function(readers, writers, timeout)
+      env.last_readers = readers
+      env.last_writers = writers
+      if options.select_error then return nil, "select failed" end
+      local r, w = {}, {}
+      for _, s in ipairs(readers) do
+        assert(not s.closed, "closed socket monitored for read")
+        if (s.kind == "listener" and #env.pending_accept > 0)
+          or #s.input > 0 or s.eof or s.udp_response then r[#r + 1] = s end
+      end
+      for _, s in ipairs(writers) do
+        assert(not s.closed, "closed socket monitored for write")
+        if s.mode ~= "unreachable" then
+          if s.kind == "upstream" and s.mode ~= "refused" then s.connected = true end
+          w[#w + 1] = s
+        end
+      end
+      env.time = env.time + (env.select_advance or ((#r == 0 and #w == 0) and timeout or 0.001))
+      return r, w
+    end
+  }
+  function env.client(raw, peer)
+    local c = socket("client")
+    c.peer, c.input = peer, raw and frame(raw) or ""
+    env.pending_accept[#env.pending_accept + 1] = c
+    return c
+  end
+  return env
+end
+
+local function relay(env, override, cache, wire_module)
+  local config = { listen_host = "198.18.32.42", allowed_clients = { "198.18.32.0/20" },
+    upstreams = { { host = "198.18.32.30", port = 15353 }, { host = "198.18.32.31", port = 15353 } },
+    local_zones = { "is.example.test", "18.198.in-addr.arpa" } }
+  for key, value in pairs(override or {}) do config[key] = value end
+  return Relay.new(config, env.api, function(line) env.logs[#env.logs + 1] = line end, wire_module or wire, cache)
+end
+
+local function route_policy(routes, choose)
+  return { routes = routes, select = function(_, q, address) return choose(q, address) end }
+end
+
+local function policy_cache()
+  local cache = { entries = {}, lookups = {}, inserts = {} }
+  function cache:get(q, policy)
+    self.lookups[#self.lookups + 1] = policy
+    local raw = self.entries[policy .. ":" .. q.name]
+    if raw then return wire.with_id(raw, q.id) end
+  end
+  function cache:put(q, policy, raw)
+    eq(id(raw), q.id, "cache receives original client ID")
+    self.inserts[#self.inserts + 1] = policy
+    self.entries[policy .. ":" .. q.name] = raw
+  end
+  return cache
+end
+
+local function steps(r, count)
+  for _ = 1, count do assert(r:step()) end
+end
+
+local function until_true(r, predicate, limit)
+  for _ = 1, limit or 1000 do
+    if predicate() then return end
+    assert(r:step())
+  end
+  error("condition did not become true")
+end
+
+local tests = {}
+
+function tests.routing_configuration_cannot_trigger_hostname_resolution()
+  local invalid = {
+    {upstreams = {{host = "resolver.example"}}},
+    {upstreams = {{host = "198.18.32.999"}}},
+    {upstreams = {{host = "198.18.32.30", port = 65536}}},
+    {local_dns_host = "localhost"}, {listen_host = "localhost"},
+    {listen_port = 0}, {local_dns_port = "53"}
+  }
+  for _, config in ipairs(invalid) do
+    local env = mock()
+    local ok = pcall(function() relay(env, config) end)
+    eq(ok, false, "invalid routing configuration rejected")
+    eq(env.tcp_created, 0, "reject before creating any socket")
+  end
+end
+function tests.persistent_connection_over_4000()
+  local env = mock()
+  local r = relay(env)
+  local c = env.client()
+  steps(r, 1)
+  for n = 1, 4100 do
+    local q = query(n)
+    c.input = c.input .. frame(q)
+    until_true(r, function() return #c.output > 0 end, 20)
+    eq(c.output, frame(answer(q)), "reply content and original ID")
+    c.output = ""
+  end
+  eq(#env.tcp_dials, 1, "persistent upstream connection count")
+  eq(env.upstream_queries, 4100)
+  eq(r.pending, 0)
+  eq(r:stats_snapshot().responses, 4100)
+  r:close()
+end
+
+function tests.reordered_partial_frames_and_writes()
+  local env = mock({ read_chunk = 3, send_chunk = 4, respond = function(s, request)
+    s.held = s.held or {}; s.held[#s.held + 1] = request
+    if #s.held == 4 then
+      for n = 4, 1, -1 do s.input = s.input .. frame(answer(s.held[n])) end
+      s.held = {}
+    end
+  end })
+  local r = relay(env)
+  local clients = {}
+  for n = 1, 4 do clients[n] = env.client(query(100 + n, "query" .. n .. ".test.")) end
+  until_true(r, function()
+    for _, c in ipairs(clients) do if #c.output < 2 or #c.output < id(c.output) + 2 then return false end end
+    return true
+  end)
+  for n, c in ipairs(clients) do eq(c.output, frame(answer(query(100 + n, "query" .. n .. ".test.")))) end
+  eq(#env.tcp_dials, 1)
+  eq(env.upstream_queries, 4)
+  r:close()
+end
+
+function tests.primary_full_does_not_open_secondary()
+  local env = mock({ respond = function() end })
+  local r = relay(env)
+  for n = 1, 8 do env.client(query(n)) end
+  until_true(r, function() return env.upstream_queries == 4 end)
+  eq(#env.tcp_dials, 1)
+  eq(r.endpoints[1].count, 4)
+  eq(#r.queue, 4)
+  r:close()
+end
+
+function tests.resource_freeze_cache_and_local_continue()
+  local env = mock({ connect_mode = function() return "resource" end })
+  local cached = query(55, "cached.test.")
+  local cache = { get = function(_, q) if q.name == "cached.test." then return answer(q.raw) end end,
+    put = function() end }
+  local r = relay(env, nil, cache)
+  local c = env.client(query(1))
+  until_true(r, function() return #c.output > 0 end)
+  eq(#env.tcp_dials, 1)
+  eq(r.resource_until, 30 + r.events.resource.at)
+  for n = 1, 100 do
+    local rejected = env.client(query(n))
+    until_true(r, function() return #rejected.output > 0 end)
+    rejected.eof = true
+  end
+  eq(#env.tcp_dials, 1, "no per-query resource retry")
+  local hit = env.client(cached)
+  local local_client = env.client(query(56, "router01.is.example.test."))
+  until_true(r, function() return #hit.output > 0 and #local_client.output > 0 end)
+  eq(hit.output, frame(answer(cached)))
+  eq(local_client.output, frame(answer(query(56, "router01.is.example.test."))))
+  eq(env.udp_count, 1)
+  eq(#env.tcp_dials, 1)
+  env.time = r.resource_until + 0.1
+  local probe = env.client(query(57))
+  until_true(r, function() return #probe.output > 0 end)
+  eq(#env.tcp_dials, 2, "one recovery probe after 30 sec")
+  r:close()
+end
+
+function tests.endpoint_backoff_and_probe()
+  local env = mock({ connect_mode = function(_, n) return n <= 2 and "refused" or "pending" end })
+  local r = relay(env)
+  local c = env.client(query(1))
+  until_true(r, function() return #c.output > 0 end)
+  eq(#env.tcp_dials, 2)
+  eq(r.endpoints[1].failures, 1)
+  eq(r.endpoints[2].failures, 1)
+  local blocked = env.client(query(2))
+  until_true(r, function() return #blocked.output > 0 end)
+  eq(#env.tcp_dials, 2)
+  env.time = 2
+  local recovered = env.client(query(3))
+  until_true(r, function() return #recovered.output > 0 end)
+  eq(recovered.output, frame(answer(query(3))))
+  eq(r.endpoints[1].failures, 0)
+  eq(r.endpoints[1].probe, false)
+  r:close()
+end
+
+function tests.idle_socket_not_writable_and_normal_fin()
+  local env = mock()
+  local r = relay(env)
+  local c = env.client(query(1))
+  until_true(r, function() return #c.output > 0 end)
+  steps(r, 1)
+  eq(#env.last_writers, 0, "idle sockets must not be writable interests")
+  local upstream = r.endpoints[1].socket
+  upstream.eof = true
+  steps(r, 1)
+  eq(r.endpoints[1].state, "closed")
+  eq(r.endpoints[1].failures, 0, "idle EOF is not a failure")
+  r:close()
+end
+
+function tests.timeout_retries_at_most_once()
+  local env = mock({ respond = function() end })
+  local r = relay(env)
+  local c = env.client(query(4))
+  until_true(r, function() return #c.output > 0 end)
+  eq(env.upstream_queries, 2)
+  eq(#env.tcp_dials, 2)
+  eq(r.pending, 0)
+  assert(env.time <= 6, "total deadline is bounded")
+  r:close()
+end
+
+function tests.connection_refused_does_not_spin()
+  local env = mock({ connect_mode = function() return "refused" end })
+  local r = relay(env)
+  local c = env.client(query(4))
+  until_true(r, function() return #c.output > 0 end)
+  eq(#env.tcp_dials, 2)
+  for _, ep in ipairs(r.endpoints) do eq(ep.state, "closed") end
+  local before = env.time
+  steps(r, 1)
+  assert(env.time >= before + 1, "select must wait with failed sockets removed")
+  r:close()
+end
+
+function tests.select_error_stops_or_sleeps()
+  local env = mock({ select_error = true })
+  local r = relay(env)
+  local ok, err = r:step()
+  eq(ok, nil); eq(err, "select failed"); eq(r.stopped, true)
+  r:close()
+  env = mock({ select_error = true })
+  local sleeps = 0
+  r = relay(env, { sleep = function(seconds) sleeps = sleeps + seconds end })
+  steps(r, 3)
+  eq(sleeps, 3)
+  r:close()
+end
+
+function tests.unauthorized_clients_and_partial_query_deadline()
+  local env = mock()
+  local r = relay(env)
+  local denied = env.client(query(1), "10.0.0.2")
+  local slow = env.client()
+  slow.input = "\0"
+  until_true(r, function() return slow.closed end)
+  eq(denied.closed, true)
+  eq(#env.tcp_dials, 0)
+  eq(r.client_count, 0)
+  r:close()
+end
+
+function tests.bounds_and_abandoned_client_correlation()
+  local env = mock({ respond = function() end })
+  local r = relay(env)
+  local clients = {}
+  for n = 1, 33 do clients[n] = env.client(query(n)) end
+  until_true(r, function() return r.pending == 32 and env.upstream_queries == 4 end)
+  eq(r.client_count, 32)
+  eq(r.pending, 32)
+  eq(#env.pending_accept, 1)
+  local abandoned
+  for _, job in pairs(r.jobs) do if job.state == "waiting" then abandoned = job; break end end
+  if abandoned and abandoned.endpoint then
+    r:_close_client(abandoned.client)
+    local ep = abandoned.endpoint
+    ep.socket.input = frame(answer(wire.with_id(abandoned.query.raw, abandoned.upstream_id)))
+    steps(r, 1)
+    eq(ep.failures, 0)
+  end
+  r:close()
+end
+
+function tests.cidr_and_zone_boundary()
+  eq(Relay.cidr_matches("198.18.40.30", "198.18.32.0/20"), true)
+  eq(Relay.cidr_matches("198.18.48.30", "198.18.32.0/20"), false)
+  eq(Relay.cidr_matches("255.255.255.255", "0.0.0.0/0"), true)
+  eq(Relay.cidr_matches("192.0.0.1", "128.0.0.0/1"), true)
+  eq(Relay.cidr_matches("127.255.255.255", "128.0.0.0/1"), false)
+  eq(Relay.cidr_matches("198.18.32.43", "198.18.32.42/31"), true)
+  eq(Relay.cidr_matches("198.18.32.44", "198.18.32.42/31"), false)
+  eq(Relay.cidr_matches("198.18.32.42", "198.18.32.42/32"), true)
+  eq(Relay.cidr_matches("198.18.32.43", "198.18.32.42/32"), false)
+  local env = mock()
+  local r = relay(env)
+  eq(r:_local({ canonical_name = canonical_name("router01.is.example.test.") }), true)
+  eq(r:_local({ canonical_name = canonical_name("notis.example.test.") }), false)
+  eq(r:_local({ canonical_name = canonical_name("is.example.test.") }), true)
+  local dotted_label = "x.is.example.test"
+  eq(r:_local({ name = dotted_label .. ".", canonical_name = string.char(#dotted_label) .. dotted_label .. "\0" }), false)
+  local dotted_prefix = "x.is"
+  eq(r:_local({ name = "x.is.example.test.", canonical_name = string.char(#dotted_prefix)
+    .. dotted_prefix .. canonical_name("example.test.") }), false)
+  r:close()
+end
+
+function tests.maximum_65535_response_partial_and_client_halfclose()
+  local env = mock({ read_chunk = 4093, send_chunk = 2047 })
+  local long_name = string.rep("x", 65532)
+  local r = relay(env, { max_query = 65535 })
+  local q = query(65530, long_name)
+  eq(#q, 65535)
+  local c = env.client(q)
+  c.eof = true
+  until_true(r, function() return #c.output == 65537 end)
+  eq(c.output, frame(answer(q)))
+  eq(c.closed, true, "half-closed client receives full response before close")
+  eq(#env.tcp_dials, 1)
+  r:close()
+end
+
+function tests.cache_hit_when_all_pending_slots_occupied()
+  local env = mock({ respond = function() end })
+  local cache = { get = function(_, q) if q.name == "cached.test." then return answer(q.raw) end end,
+    put = function() end }
+  local r = relay(env, nil, cache)
+  local clients = {}
+  for n = 1, 32 do clients[n] = env.client(query(n)) end
+  until_true(r, function() return r.pending == 32 end)
+  clients[1].input = frame(query(400, "cached.test."))
+  until_true(r, function() return #clients[1].output > 0 end)
+  eq(clients[1].output, frame(answer(query(400, "cached.test."))))
+  eq(r.pending, 32)
+  r:close()
+end
+
+function tests.resource_recovery_probe_only_one_and_reset_requires_response()
+  local env = mock({ connect_mode = function(_, n) return n == 1 and "resource" or "pending" end,
+    respond = function() end })
+  local r = relay(env)
+  local failed = env.client(query(1))
+  until_true(r, function() return #failed.output > 0 end)
+  env.time = r.resource_until + 0.1
+  local clients = {}
+  for n = 2, 8 do clients[#clients + 1] = env.client(query(n)) end
+  until_true(r, function() return env.upstream_queries == 1 end)
+  eq(#env.tcp_dials, 2)
+  eq(r.resource_recovery, true)
+  eq(r.endpoints[1].count, 1, "recovery probe is not pipelined")
+  local ep = r.endpoints[1]
+  local job
+  for _, value in pairs(ep.inflight) do job = value end
+  ep.socket.input = frame(answer(wire.with_id(job.query.raw, job.upstream_id)))
+  steps(r, 1)
+  eq(r.resource_recovery, false)
+  eq(ep.probe, false)
+  eq(ep.count, 4, "normal pipeline resumes only after valid DNS reply")
+  r:close()
+end
+
+function tests.connection_tokens_even_normal_close()
+  local env = mock({ respond = function(s, request) s.input = frame(answer(request)); s.eof = true end })
+  local r = relay(env)
+  local c = env.client()
+  for n = 1, 8 do
+    c.input = c.input .. frame(query(n))
+    until_true(r, function() return #c.output > 0 end)
+    c.output = ""
+  end
+  eq(#env.tcp_dials, 8)
+  for n, time in ipairs(env.tcp_dials) do
+    assert(n <= 2 + time, "dial token bucket rate exceeded")
+  end
+  r:close()
+end
+
+function tests.partial_query_deadline_not_extended_by_first_byte()
+  local env = mock()
+  local r = relay(env)
+  local c = env.client()
+  steps(r, 1)
+  env.time = 2.5
+  c.input = "\0"
+  steps(r, 1)
+  env.time = 3.1
+  steps(r, 1)
+  eq(c.closed, true)
+  r:close()
+end
+
+function tests.real_wire_and_cache_modules()
+  local real_wire, Cache = require("dns_wire"), require("cache")
+  local env = mock({ respond = function(s, raw)
+    local q = assert(real_wire.parse_query(raw))
+    local response = string.sub(raw, 1, 2) .. "\129\128\0\1\0\1\0\0\0\0" .. q.question
+      .. "\192\12\0\1\0\1\0\0\0\60\0\4\192\0\2\1"
+    s.input = s.input .. real_wire.frame(response)
+  end })
+  local r = Relay.new({ listen_host = "198.18.32.42", allowed_clients = { "198.18.32.0/20" },
+    upstreams = { { host = "198.18.32.30", port = 15353 } } },
+    env.api, function() end, real_wire, Cache.new(256, 1048576))
+  local q1 = "\0\100\1\0\0\1\0\0\0\0\0\0\3www\7example\3com\0\0\1\0\1"
+  local c = env.client(q1)
+  until_true(r, function() return #c.output > 0 end)
+  local response1 = string.sub(c.output, 3)
+  assert(real_wire.validate_response(response1, assert(real_wire.parse_query(q1))))
+  c.output = ""
+  local q2 = real_wire.with_id(q1, 101)
+  c.input = real_wire.frame(q2)
+  until_true(r, function() return #c.output > 0 end)
+  local response2 = string.sub(c.output, 3)
+  assert(real_wire.validate_response(response2, assert(real_wire.parse_query(q2))))
+  eq(real_wire.with_id(response1, 101), response2)
+  eq(env.upstream_queries, 1)
+  eq(r:stats_snapshot().cache_hits, 1)
+  eq(r:stats_snapshot().cache.entries, 1)
+  r:close()
+end
+
+function tests.response_readiness_does_not_extend_deadline()
+  local env = mock({ respond = function() end })
+  local r = relay(env, { upstreams = { { host = "198.18.32.30", port = 15353 } } })
+  env.client(query(91))
+  until_true(r, function() return env.upstream_queries == 1 end)
+  local ep, job = r.endpoints[1]
+  for _, value in pairs(ep.inflight) do job = value end
+  eq(job.state, "waiting")
+  local old_socket = ep.socket
+  old_socket.input = frame(answer(wire.with_id(job.query.raw, job.upstream_id)))
+  env.time, env.select_advance = job.response_deadline - 0.5, 1
+  steps(r, 1)
+  eq(old_socket.closed, true)
+  eq(ep.failures, 1)
+  eq(r:stats_snapshot().upstream_responses, nil, "expired readable reply must not succeed")
+  eq(r:stats_snapshot().servfail, 1)
+  r:close()
+end
+
+function tests.healthy_secondary_continues_during_primary_resource_probe()
+  local env = mock({ connect_mode = function(s, n)
+    if n == 1 then return "refused" end
+    return "pending"
+  end, respond = function(s, raw)
+    if s.host == "198.18.32.31" then s.input = s.input .. frame(answer(raw)) end
+  end })
+  local r = relay(env)
+  local first = env.client(query(101))
+  until_true(r, function() return #first.output > 0 end)
+  eq(r.endpoints[2].state, "ready")
+  eq(r.endpoints[2].probe, false)
+  -- Existing secondary is healthy; a previous allocation failure requires a
+  -- single primary new-connection probe before lifting the global guard.
+  r.resource_recovery, r.resource_until = true, 0
+  env.time = 2
+  local probe = env.client(query(102))
+  until_true(r, function() return r.endpoints[1].state == "ready" and r.endpoints[1].count == 1 end)
+  local ordinary = env.client(query(103))
+  until_true(r, function() return #ordinary.output > 0 end)
+  eq(ordinary.output, frame(answer(query(103))))
+  eq(#probe.output, 0, "primary probe still awaits its response")
+  eq(r.resource_recovery, true, "secondary response cannot validate new-connection recovery")
+  eq(#env.tcp_dials, 3, "reuse healthy secondary without another dial")
+  r:close()
+end
+
+function tests.accept_resource_failure_waits_without_blocking_existing_clients()
+  local env = mock()
+  local cache = { get = function(_, q) if q.name == "cached.test." then return answer(q.raw) end end,
+    put = function() end }
+  local r = relay(env, nil, cache)
+  local cached = env.client(query(10, "cached.test."))
+  local local_client = env.client(query(11, "router01.is.example.test."))
+  until_true(r, function() return #cached.output > 0 and #local_client.output > 0 end)
+  cached.output, local_client.output = "", ""
+  local queued = env.client(query(12))
+  env.accept_error = "Too many open files"
+  steps(r, 1)
+  eq(#env.accept_failures, 1)
+  cached.input = frame(query(13, "cached.test."))
+  local_client.input = frame(query(14, "router01.is.example.test."))
+  until_true(r, function() return #cached.output > 0 and #local_client.output > 0 end)
+  eq(cached.output, frame(answer(query(13, "cached.test."))))
+  eq(local_client.output, frame(answer(query(14, "router01.is.example.test."))))
+  eq(#env.accept_failures, 1, "existing work must not bypass accept cooldown")
+  eq(env.udp_count, 2)
+  eq(env.upstream_queries, 0)
+  for _, socket in ipairs(env.last_readers) do assert(socket ~= r.listener, "listener monitored during accept cooldown") end
+  local before = env.time
+  steps(r, 1)
+  assert(env.time >= before + 1, "idle event loop must wait despite queued unaccepted connection")
+  steps(r, 1)
+  eq(#env.accept_failures, 2)
+  steps(r, 6)
+  eq(#env.accept_failures, 5)
+  for index = 2, #env.accept_failures do
+    assert(env.accept_failures[index] - env.accept_failures[index-1] >= 1)
+  end
+  eq(r:stats_snapshot().accept_failures, 5)
+  env.accept_error = nil
+  env.time = r.accept_retry_at + .01
+  until_true(r, function() return #queued.output > 0 end)
+  eq(queued.output, frame(answer(query(12))), "accept resumes after cooldown and resource recovery")
+  r:close()
+end
+
+function tests.invalid_listener_fails_once_and_closes()
+  for _, failure in ipairs({ "closed", "Bad file descriptor", "not a socket", "Socket operation on non-socket" }) do
+    local env = mock()
+    local r = relay(env)
+    env.client(query(19))
+    env.accept_error = failure
+    local listener = r.listener
+    local ok, err = r:step()
+    eq(ok, nil)
+    assert(string.find(err, "listener failed", 1, true))
+    eq(r.stopped, true)
+    eq(r.listener, nil)
+    eq(listener.closed, true)
+    eq(listener.close_count, 1)
+    eq(#env.accept_failures, 1)
+    eq(r:step(), false)
+    r:close()
+    eq(listener.close_count, 1)
+  end
+end
+
+function tests.policy_cache_is_separate_and_uses_original_client_address()
+  local a = { policy_id = "source_a", upstreams = { { host = "198.18.32.30", port = 15353 } } }
+  local b = { policy_id = "source_b", upstreams = { { host = "198.18.32.31", port = 15353 } } }
+  local seen = {}
+  local policy = route_policy({ a, b }, function(_, address)
+    seen[address] = true
+    return address == "198.18.32.30" and a or b
+  end)
+  local env, cache = mock(), policy_cache()
+  local r = relay(env, { dns_policy = policy }, cache)
+  local ca = env.client(query(301), "198.18.32.30")
+  local cb = env.client(query(302), "198.18.40.2")
+  until_true(r, function() return #ca.output > 0 and #cb.output > 0 end)
+  eq(env.upstream_queries, 2)
+  assert(seen["198.18.32.30"] and seen["198.18.40.2"])
+  local hosts = {}
+  for _, request in ipairs(env.upstream_requests) do hosts[request.host] = true end
+  assert(hosts["198.18.32.30"] and hosts["198.18.32.31"])
+  assert(cache.entries["source_a:example.test."] and cache.entries["source_b:example.test."])
+  ca.output, cb.output = "", ""
+  ca.input, cb.input = frame(query(303)), frame(query(304))
+  until_true(r, function() return #ca.output > 0 and #cb.output > 0 end)
+  eq(ca.output, frame(answer(query(303))))
+  eq(cb.output, frame(answer(query(304))))
+  eq(env.upstream_queries, 2, "each source policy should hit only its own cache")
+  eq(r:stats_snapshot().cache_hits, 2)
+  r:close()
+end
+
+function tests.policy_is_frozen_on_job_and_cannot_change_cache_namespace()
+  local selected = { policy_id = "original", upstreams = { { host = "198.18.32.30", port = 15353 } } }
+  local policy = route_policy({ selected }, function() return selected end)
+  local env, cache = mock({ respond = function() end }), policy_cache()
+  local r = relay(env, { dns_policy = policy }, cache)
+  local c = env.client(query(305))
+  until_true(r, function() return env.upstream_queries == 1 end)
+  selected.policy_id, selected.upstreams[1].host, r.cfg.policy_id = "changed", "198.18.32.99", "changed"
+  local ep = r.endpoints[1]
+  ep.socket.input = frame(answer(env.upstream_requests[1].raw))
+  until_true(r, function() return #c.output > 0 end)
+  eq(cache.inserts[1], "original")
+  eq(ep.host, "198.18.32.30")
+  c.output, c.input = "", frame(query(306))
+  until_true(r, function() return #c.output > 0 end)
+  eq(env.upstream_queries, 1)
+  eq(cache.lookups[#cache.lookups], "original")
+  r:close()
+end
+
+function tests.selected_rule_failure_never_uses_another_rule()
+  local a = { policy_id = "selected", upstreams = { { host = "198.18.32.30", port = 15353 } } }
+  local b = { policy_id = "other", upstreams = { { host = "198.18.32.31", port = 15353 } } }
+  local policy = route_policy({ a, b }, function(_, address) return address == "198.18.32.30" and a or b end)
+  local env = mock({ connect_mode = function(s) return s.host == "198.18.32.30" and "refused" or "pending" end })
+  local r = relay(env, { dns_policy = policy })
+  local failed = env.client(query(307))
+  until_true(r, function() return #failed.output > 0 end)
+  eq(string.sub(failed.output, 5, 6), "E2")
+  eq(#env.tcp_dials, 1)
+  eq(r.endpoints[2].socket, nil, "another rule is not a retry fallback")
+  local other = env.client(query(308), "198.18.40.2")
+  until_true(r, function() return #other.output > 0 end)
+  eq(other.output, frame(answer(query(308))))
+  eq(env.upstream_requests[1].host, "198.18.32.31")
+  r:close()
+end
+
+function tests.policy_reject_and_unmatched_do_not_access_cache_or_upstream()
+  local reject = { policy_id = "reject", reject = true, upstreams = {} }
+  local policy = route_policy({ reject }, function(q)
+    if q.name == "rejected.test." then return reject end
+    if q.name == "unknown.test." then return { policy_id = "unregistered", upstreams = {} } end
+    return nil, "no matching rule"
+  end)
+  local cache, env = policy_cache(), mock()
+  local r = relay(env, { dns_policy = policy }, cache)
+  local blocked = env.client(query(309, "rejected.test."))
+  local unmatched = env.client(query(310, "unmatched.test."))
+  local unknown = env.client(query(311, "unknown.test."))
+  local local_client = env.client(query(312, "router01.is.example.test."))
+  until_true(r, function() return #unmatched.output > 0 and #unknown.output > 0 and #local_client.output > 0 end)
+  eq(#blocked.output, 0, "reject means drop, not SERVFAIL")
+  eq(string.sub(unmatched.output, 5, 6), "E2")
+  eq(string.sub(unknown.output, 5, 6), "E2")
+  eq(local_client.output, frame(answer(query(312, "router01.is.example.test."))))
+  eq(#cache.lookups, 0)
+  eq(#env.tcp_dials, 0)
+  eq(r:stats_snapshot().policy_rejects, 1)
+  eq(r:stats_snapshot().policy_unmatched, 2)
+  eq(env.udp_count, 1, "local zones retain precedence over external policies")
+  r:close()
+end
+
+function tests.shared_peer_pipeline_and_edns_descriptors_span_policies()
+  local a = { policy_id = "off", upstreams = { { host = "198.18.32.30", port = 15353, edns = false } } }
+  local b = { policy_id = "on", upstreams = { { host = "198.18.32.30", port = 15353, edns = true } } }
+  local policy = route_policy({ a, b }, function(_, address) return address == "198.18.32.30" and a or b end)
+  local transformed, returned, implementation = {}, {}, {}
+  for key, value in pairs(wire) do implementation[key] = value end
+  implementation.upstream_query = function(q, server)
+    transformed[q.id] = server.edns
+    eq(q.cache_allow_no_opt, true)
+    return q.raw
+  end
+  implementation.downstream_response = function(raw, q, server) returned[q.id] = server.edns; return raw end
+  local env = mock({ respond = function(s, raw, state)
+    if state.upstream_queries > 4 then s.input = s.input .. frame(answer(raw)) end
+  end })
+  local r = relay(env, { dns_policy = policy }, nil, implementation)
+  local clients = {}
+  for n = 1, 6 do clients[n] = env.client(query(320+n, "shared" .. n .. ".test."), n % 2 == 1 and "198.18.32.30" or "198.18.40.2") end
+  until_true(r, function() return env.upstream_queries == 4 end)
+  eq(#r.endpoints, 1)
+  eq(r.endpoints[1].count, 4)
+  eq(#r.queue, 2)
+  eq(#env.tcp_dials, 1)
+  local responses = ""
+  for n = 4, 1, -1 do responses = responses .. frame(answer(env.upstream_requests[n].raw)) end
+  r.endpoints[1].socket.input = responses
+  until_true(r, function()
+    for _, client in ipairs(clients) do if #client.output == 0 then return false end end
+    return true
+  end)
+  for n, client in ipairs(clients) do
+    eq(client.output, frame(answer(query(320+n, "shared" .. n .. ".test."))))
+    eq(transformed[320+n], n % 2 == 0)
+    eq(returned[320+n], n % 2 == 0)
+  end
+  eq(env.upstream_queries, 6)
+  eq(#env.tcp_dials, 1)
+  r:close()
+end
+
+function tests.policy_connection_cap_queues_busy_and_evicts_only_idle()
+  local routes = {}
+  for n = 1, 5 do routes[n] = { policy_id = "route" .. n,
+    upstreams = { { host = "198.18.32." .. (29+n), port = 15353 } } } end
+  local policy = route_policy(routes, function(q) return routes[tonumber(string.match(q.name, "^route(%d)"))] end)
+  local env = mock({ respond = function() end })
+  local r = relay(env, { dns_policy = policy, response_timeout = 20, total_timeout = 30 })
+  for n = 1, 5 do env.client(query(330+n, "route" .. n .. ".test.")) end
+  until_true(r, function() return env.upstream_queries == 4 end)
+  eq(r.cfg.max_upstream_connections, 4)
+  eq(r:_connection_count(), 4)
+  eq(#r.queue, 1)
+  local busy_sockets, finished, waiting_endpoint = {}
+  for _, ep in ipairs(r.endpoints) do
+    if ep.socket then
+      busy_sockets[#busy_sockets + 1] = ep.socket
+      if not finished then finished = ep end
+    else waiting_endpoint = ep end
+  end
+  assert(waiting_endpoint)
+  local request
+  for _, item in ipairs(env.upstream_requests) do if item.host == finished.host then request = item.raw end end
+  finished.socket.input = frame(answer(request))
+  until_true(r, function() return env.upstream_queries == 5 end)
+  eq(busy_sockets[1].closed, true, "only the completed idle connection is evicted")
+  for n = 2, 4 do eq(busy_sockets[n].closed, nil, "busy upstream must survive pool pressure") end
+  eq(r:_connection_count(), 4)
+  eq(r:stats_snapshot().peak_upstream_connections, 4)
+  eq(r:stats_snapshot().upstream_pool_evictions, 1)
+  for n, time in ipairs(env.tcp_dials) do assert(n <= 2 + time, "dial limit must remain global") end
+  r:close()
+end
+
+function tests.policy_idle_pool_replacement_is_lru()
+  local routes = {}
+  for n = 1, 3 do routes[n] = { policy_id = "route" .. n,
+    upstreams = { { host = "198.18.32." .. (29+n), port = 15353 } } } end
+  local policy = route_policy(routes, function(q) return routes[tonumber(string.match(q.name, "^route(%d)"))] end)
+  local env = mock()
+  local r = relay(env, { dns_policy = policy, max_upstream_connections = 2 })
+  for _, n in ipairs({ 1, 2, 1 }) do
+    local c = env.client(query(340+n, "route" .. n .. ".test."))
+    until_true(r, function() return #c.output > 0 end)
+  end
+  local newest, oldest = r.endpoints[1].socket, r.endpoints[2].socket
+  local c = env.client(query(343, "route3.test."))
+  until_true(r, function() return #c.output > 0 end)
+  eq(newest.closed, nil)
+  eq(oldest.closed, true, "least recently used idle peer should be evicted")
+  eq(r:_connection_count(), 2)
+  r:close()
+end
+
+function tests.resource_freeze_is_shared_across_policy_groups()
+  local routes = {}
+  for n = 1, 3 do routes[n] = { policy_id = "route" .. n,
+    upstreams = { { host = "198.18.32." .. (29+n), port = 15353 } } } end
+  local policy = route_policy(routes, function(q) return routes[tonumber(string.match(q.name, "^route(%d)"))] end)
+  local env = mock({ connect_mode = function(s) return s.host == "198.18.32.30" and "resource" or "pending" end })
+  local r = relay(env, { dns_policy = policy })
+  local healthy = env.client(query(353, "route3.test."))
+  until_true(r, function() return #healthy.output > 0 end)
+  local failed = env.client(query(351, "route1.test."))
+  until_true(r, function() return #failed.output > 0 end)
+  eq(r.resource_recovery, true)
+  local other = env.client(query(352, "route2.test."))
+  healthy.output, healthy.input = "", frame(query(354, "route3.test."))
+  until_true(r, function() return #other.output > 0 and #healthy.output > 0 end)
+  eq(string.sub(other.output, 5, 6), "E2")
+  eq(healthy.output, frame(answer(query(354, "route3.test."))))
+  eq(#env.tcp_dials, 2, "another policy must not bypass global resource freeze")
+  eq(r.resource_recovery, true, "existing shared connections cannot complete a new-connection probe")
+  r:close()
+end
+
+function tests.four_server_route_still_allows_only_two_attempts()
+  local route = { policy_id = "fallback", upstreams = {} }
+  for n = 1, 4 do route.upstreams[n] = { host = "198.18.32." .. (29+n), port = 15353 } end
+  local policy = route_policy({ route }, function() return route end)
+  local env = mock({ connect_mode = function() return "refused" end })
+  local r = relay(env, { dns_policy = policy })
+  local c = env.client(query(360))
+  until_true(r, function() return #c.output > 0 end)
+  eq(string.sub(c.output, 5, 6), "E2")
+  eq(#env.tcp_dials, 2)
+  eq(r.endpoints[3].socket, nil)
+  eq(r.endpoints[4].socket, nil)
+  r:close()
+end
+
+function tests.policy_limits_and_unregistered_routes_fail_closed()
+  local routes = {}
+  for n = 1, 17 do routes[n] = { policy_id = "route" .. n, upstreams = { { host = "198.18.32." .. n } } } end
+  local env = mock()
+  local ok, err = pcall(relay, env, { dns_policy = route_policy(routes, function() return routes[1] end) })
+  eq(ok, false)
+  assert(string.find(err, "16 distinct", 1, true))
+  eq(env.tcp_created, 0, "validate endpoint limits before opening the listener")
+end
+
+function tests.actual_policy_wire_and_cache_preserve_route_and_edns_behavior()
+  local Policy, real_wire, Cache = require("dns_policy"), require("dns_wire"), require("cache")
+  local policy = assert(Policy.parse("dns server select 10 198.18.32.30 edns=off any _aaplcache._tcp.example.test\n"
+    .. "dns server select 9999 198.18.32.31 edns=on any . 198.18.32.1-198.18.32.254\n"
+    .. "dns server select 500201 198.18.32.32 edns=off any .\n"))
+  local opt = "\0\0\41\4\208\0\0\0\0\0\0"
+  local function make_query(name, value, edns)
+    return u16(value) .. "\1\0\0\1\0\0\0\0" .. (edns and "\0\1" or "\0\0")
+      .. canonical_name(name) .. "\0\1\0\1" .. (edns and opt or "")
+  end
+  local upstream_opts = {}
+  local env = mock({ respond = function(s, raw)
+    local q = assert(real_wire.parse_query(raw))
+    upstream_opts[s.host] = q.opt ~= nil
+    local response = string.sub(raw, 1, 2) .. "\129\128\0\1\0\1\0\0" .. (q.opt and "\0\1" or "\0\0")
+      .. q.question .. "\192\12\0\1\0\1\0\0\0\60\0\4\192\0\2" .. string.char(tonumber(string.match(s.host, "(%d+)$")))
+      .. (q.opt and opt or "")
+    s.input = s.input .. real_wire.frame(response)
+  end })
+  local cache = Cache.new(256, 1048576)
+  local r = relay(env, { dns_policy = policy }, cache, real_wire)
+  local q1, q2 = make_query("www.example.com", 701, false), make_query("www.example.com", 702, true)
+  local q3 = make_query("_aaplcache._tcp.example.test", 703, true)
+  local a, b, c = env.client(q1, "198.18.32.30"), env.client(q2, "198.18.40.2"), env.client(q3, "198.18.40.2")
+  until_true(r, function() return #a.output > 0 and #b.output > 0 and #c.output > 0 end)
+  for _, item in ipairs({ {a, q1}, {b, q2}, {c, q3} }) do
+    local parsed = assert(real_wire.validate_response(string.sub(item[1].output, 3), assert(real_wire.parse_query(item[2]))))
+    eq(parsed.rcode, 0)
+    eq(parsed.opt, nil, "EDNS introduced on the upstream hop is removed for the legacy client")
+  end
+  eq(upstream_opts["198.18.32.30"], false)
+  eq(upstream_opts["198.18.32.31"], true)
+  eq(upstream_opts["198.18.32.32"], false)
+  eq(env.upstream_queries, 3)
+  eq(cache:stats().entries, 3)
+  b.output, b.input = "", real_wire.frame(real_wire.with_id(q2, 704))
+  until_true(r, function() return #b.output > 0 end)
+  assert(real_wire.validate_response(string.sub(b.output, 3), assert(real_wire.parse_query(real_wire.with_id(q2, 704)))))
+  eq(env.upstream_queries, 3, "explicit EDNS-off response should remain cacheable for this policy")
+  eq(r:stats_snapshot().cache_hits, 1)
+  r:close()
+end
+
+function tests.policy_response_transform_failure_is_final_servfail()
+  local route = { policy_id = "edns", upstreams = { { host = "198.18.32.30", port = 15353, edns = true } } }
+  local policy = route_policy({ route }, function() return route end)
+  local implementation = {}
+  for key, value in pairs(wire) do implementation[key] = value end
+  implementation.downstream_response = function() return nil, "unrepresentable EDNS response" end
+  local env, cache = mock(), policy_cache()
+  local r = relay(env, { dns_policy = policy }, cache, implementation)
+  local c = env.client(query(705))
+  until_true(r, function() return #c.output > 0 end)
+  eq(string.sub(c.output, 5, 6), "E2")
+  eq(env.upstream_queries, 1)
+  eq(r.endpoints[1].failures, 0, "valid upstream communication is not a transport fault")
+  eq(#cache.inserts, 0)
+  eq(r:stats_snapshot().failure_response_transform, 1)
+  r:close()
+end
+
+function tests.retry_uses_secondary_when_token_wait_outlasts_primary_backoff()
+  local primary_closes = false
+  local env = mock({ respond = function(s, raw)
+    if primary_closes and s.host == "198.18.32.30" then s.eof = true
+    else s.input = s.input .. frame(answer(raw)) end
+  end })
+  local route = { policy_id = "selected", upstreams = {
+    { host = "198.18.32.30", port = 15353 }, { host = "198.18.32.31", port = 15353 } } }
+  local policy = route_policy({ route }, function() return route end)
+  local r = relay(env, { dns_policy = policy })
+  local c = env.client(query(801))
+  until_true(r, function() return #c.output > 0 end)
+  primary_closes = true
+  r.tokens, r.token_time = 0, r.now
+  c.output, c.input = "", frame(query(802))
+  until_true(r, function() return #c.output > 0 end)
+  eq(c.output, frame(answer(query(802))))
+  eq(env.upstream_queries, 3, "warmup plus one primary attempt plus one secondary retry")
+  eq(env.upstream_requests[2].host, "198.18.32.30")
+  eq(env.upstream_requests[3].host, "198.18.32.31")
+  eq(#env.tcp_dials, 2, "failed primary is not reopened when its backoff expires with the token")
+  eq(r:stats_snapshot().retries, 1)
+  r:close()
+end
+
+local names = {}
+for name in pairs(tests) do names[#names + 1] = name end
+table.sort(names)
+for _, name in ipairs(names) do tests[name](); print("PASS " .. name) end
+print("relay tests: " .. #names .. " passed")
