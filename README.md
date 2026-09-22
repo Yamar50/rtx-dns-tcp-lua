@@ -2,6 +2,16 @@
 
 # RTX TCP DNS補完
 
+## v0.1.2の主な修正点
+
+- フレッツ光などでppインターフェイスを使う環境に対応しました。
+- DNSサーバアドレスをDHCPから取得する環境に対応しました。
+- dns server selectの解析処理の不具合を修正しました。
+
+変更内容の詳細・検証結果・更新手順は、[v0.1.2の解説](docs/releases/v0.1.2.md)と[GitHub Release](https://github.com/Yamar50/rtx-dns-tcp-lua/releases/tag/v0.1.2)をご覧ください。
+
+## 概要
+
 このリポジトリには、MITなどのソフトウェアライセンスを設定していません。生成方法と既存OSSとの照合結果は [コードの来歴と確認範囲](docs/code-provenance.md) を参照してください。
 
 Yamaha RTXの内蔵UDP DNSと静的ホスト登録を維持し、LuaでTCP DNSを補完します。実機検証対象は **RTX830 Rev.15.02.33** と **RTX1210 Rev.14.01.42**、どちらも整数版Lua 5.1.5（機能1.08）です。RTX810・RTX1300は未検証です。
@@ -16,8 +26,6 @@ Yamaha RTXの内蔵UDP DNSと静的ホスト登録を維持し、LuaでTCP DNS�
 クライアントがUDPの切り詰め応答を受けてTCPへ再問い合わせする場合に、同じRTXのIPでTCP問い合わせを受け付ける構成です。Luaが内蔵DNSの上流通信を捕捉する仕組みではありません。RTX内蔵DNSをTCPで補完し、大きなDNS応答をクライアントへ返せるようにするのが、このスクリプトの目的です。
 
 ## ビルド済みファイルからの導入
-
-[v0.1.2の変更点](docs/releases/v0.1.2.md)：PP・DHCPから取得したDNS、30秒ごとの取得情報更新、`dns server select`の追加構文、AAAAフィルターに対応しました。
 
 [Releases](https://github.com/Yamar50/rtx-dns-tcp-lua/releases)の`rtx-dns.lua`は、そのままRTXへ転送して使うための配布ファイルです。Luaファイルの手編集や手元でのビルドは不要です。
 
