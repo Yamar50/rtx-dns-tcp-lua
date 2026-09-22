@@ -14,7 +14,7 @@ GitHubの[Releases](https://github.com/Yamar50/rtx-dns-tcp-lua/releases)から`r
 - キャッシュ：256件。実行時間の制限なし。統計は60秒間隔でsyslogへ出力。
 - 送信元IPごとの制限：TCP接続4本、平均20問い合わせ/秒・バースト40件。手編集なしで有効になり、切断・再接続でも問い合わせ枠はリセットしません。全体では32接続までです。
 
-`dns service off`、未対応の上流選択構文、アクセス許可を確定できない設定では起動を中止します。利用するDNSの設定は事前にRTX側で行ってください。対応する上流は静的なIPv4 DNSサーバーです。
+`dns service off`、重複規則番号・入力上限超過・アクセス許可を確定できない設定では起動を中止します。固定IPv4のほか、PP・DHCPで取得したIPv4 DNSにも対応します。取得元不明や未対応上流に該当する問い合わせはSERVFAILにします。利用するDNSの設定は事前にRTX側で行ってください。[選択規則と例外時の動作](dns-policy.md)を参照してください。
 
 ### `dns host lan1`と別セグメントからの利用
 
@@ -88,7 +88,7 @@ dig @192.0.2.1 router.home.arpa A +tcp
 
 ## 設定変更と更新
 
-`dns server`、`dns server select`、`dns host`、静的ホスト名、対象インターフェースのIPなどを変更した後は、スクリプトを再起動します。設定は起動時に読み取り、稼働中には自動再読込しません。
+`dns server`、`dns server select`、`dns host`、静的ホスト名、対象インターフェースのIPなどを変更した後は、スクリプトを再起動します。設定は起動時に読み取り、稼働中には自動再読込しません。PP・DHCPで取得したDNSアドレスと必要なPP接続状態だけは30秒ごとに確認するため、同じ設定のまま取得アドレスが変わった場合の再起動は不要です。
 
 ```text
 terminate lua file /lua/rtx-dns.lua

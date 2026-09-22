@@ -19,7 +19,7 @@ Yamaha RTXの内蔵UDP DNSと静的ホスト登録を維持し、LuaでTCP DNS�
 
 [Releases](https://github.com/Yamar50/rtx-dns-tcp-lua/releases)の`rtx-dns.lua`は、そのままRTXへ転送して使うための配布ファイルです。Luaファイルの手編集や手元でのビルドは不要です。
 
-起動時に`dns host`からアクセス許可、`ip host`／`dns static`からローカルの登録名、`dns server select`／`dns server`から上流DNSを読み取ります。TCP/53で待ち受け、256件のキャッシュを使い、終了時間を設けずに動作します。`dns host any`または省略時は、RTXの既定値どおり全ホストを許可します。
+起動時に`dns host`からアクセス許可、`ip host`／`dns static`からローカルの登録名、`dns server select`／`dns server`／`dns server pp`／`dns server dhcp`から上流DNSを選びます。PP・DHCPで取得したDNSは30秒ごとに更新します。TCP/53で待ち受け、256件のキャッシュを使い、終了時間を設けずに動作します。`dns host any`または省略時は、RTXの既定値どおり全ホストを許可します。
 
 USBメモリやmicroSDカード、SFTP等でインストールします。`/lua/rtx-dns.lua`へコピーした後は、次のコマンドで開始できます。`100`は未使用のスケジュール番号に置き換えます。
 
@@ -47,7 +47,7 @@ save
 ## 実装内容
 
 - 上流接続は固定設定で最大2本、RTXの規則を読み込む設定では既定で最大4本。同じ宛先の接続を規則間で共有します。1接続あたり4件のパイプライン、ID変換、順不同応答、部分送受信に対応。応答は最大65,535バイト。
-- Lua起動時に稼働中configの `dns service` を確認し、recursiveなら `dns server select` と `dns server` を自動で読み取り、番号順に問い合わせ名・タイプ・元クライアントIPv4で選択します。
+- Lua起動時に稼働中configの `dns service` を確認し、recursiveならDNS設定を自動で読み取り、番号順に問い合わせ名・タイプ・元クライアントIPv4・`restrict pp`で選択します。`dns service fallback on/off`は起動を妨げません。
 - キャッシュは最大256件・本文合計1MiB・TTL管理フィールド合計4,096個。参照時に期限確認し、容量不足時はLRUで追い出します。選択規則ごとにキーを分け、256件・1MiBの上限は全規則で共有します。毎秒の全件走査は行いません。
 - キャッシュヒットではID、質問の大文字小文字、残りTTLを更新。正の通常応答のみ保存し、NXDOMAIN、NODATA、TTL=0、DNSSEC/特別なEDNSなどは保存しません。
 - 接続試行は全体で平均毎秒1回、バースト2回まで。宛先別の待機は1→2→4→8→16→30秒。ソケット・送信元アドレス不足では新規接続を全体で30秒休止します。
@@ -72,6 +72,9 @@ save
 ```sh
 lua tests/test_wire_cache.lua
 lua tests/test_dns_policy.lua
+lua tests/test_dynamic_policy.lua
+lua tests/test_dns_runtime.lua
+lua tests/test_aaaa_filter.lua
 lua tests/test_auto_config.lua
 lua tests/test_policy_wire.lua
 lua tests/test_main.lua
@@ -93,11 +96,17 @@ python3 tools/build.py --config config/release.lua --output build/release/rtx-dn
 
 設定全体をログへ出力せず、ルーターのconfigを変更しません。
 
-対応するのは静的IPv4の `dns server select`（1規則につき1〜2台）と、未一致時の `dns server`（最大4候補）です。小さい規則番号から最初に一致した規則を使い、その上流が失敗しても後続規則へ切り替えません。元クライアントの送信元IPv4を使い、単一IP・CIDR・開始IP～終了IP、通常のタイプ指定、`any`、PTRのIPv4/CIDR、`edns=on/off`を扱います。EDNS省略時はヤマハの既定どおりoffです。
+`dns server select`を小さい番号から評価し、最初に一致した規則を使います。固定IP、PP取得、DHCP取得、rejectに対応し、選択した上流が失敗しても後続規則へ切り替えません。通常のDNS設定は固定の`dns server`、`dns server pp`、`dns server dhcp`の順に選びます。元クライアントの送信元IPv4、問い合わせタイプ、PTRのIPv4/プレフィックス、`restrict pp`、`edns=on/off`を扱います。EDNS省略時はヤマハの既定どおりoffです。
+
+PP・DHCPの状態は起動時と30秒ごとに確認します。接続先や選択状態が変わった場合は、古い接続とキャッシュを破棄し、処理中の問い合わせにはSERVFAILを返します。これは取得済みDNSの更新であり、config変更の自動再読込ではありません。
+
+複数のIPv4インターフェースがDHCPを利用していて取得DNSを各インターフェースに対応付けられない場合は、該当規則への問い合わせをSERVFAILにします。取得元不明や状態取得失敗を「DNS未取得」と扱って別のDNSに送ることはしません。[選択規則と例外時の詳細](docs/dns-policy.md)
 
 `edns=off`では上流向けのOPT（DOやオプションを含む）を除去します。DNSSEC関連・特別なEDNS要求をキャッシュしない方針は維持します。`edns=on`では既存OPTを保持し、OPTのない要求には空OPTを追加します。これにより、以前の固定設定の透明中継と応答内容が変わる場合があります。
 
-`select ... reject` は該当する問い合わせを破棄します。PP/DHCPからの動的上流取得、`restrict pp`、NAT46、IPv6上流、`reject ptr`などの未対応構文を検出すると、設定全体の読み込みを失敗させて起動しません。最大256規則・異なる上流宛先16個までです。
+`select ... reject`はPTRも含め、該当する問い合わせを破棄します。IPv6だけの上流、NAT46など転送できない規則は、該当する問い合わせにSERVFAILを返します。未対応構文を無条件に読み飛ばしません。条件を解釈できない規則では、その番号で該当する可能性がある問い合わせを止めます。重複規則番号・入力上限超過・不明なアクセス許可などは起動エラーになります。最大256規則・異なる上流宛先16個までです。
+
+`dns service aaaa filter on`では、外部へのAAAA問い合わせの応答からAAAAと対応するRRSIGを除去し、CNAMEなどを保持します。加工した応答のADは解除し、キャッシュには保存しません。登録済みの簡易DNS名は従来どおり内蔵UDP DNSへ渡し、内蔵側のフィルターに従います。
 
 配布版はRTXの静的登録名を起動時に読み取り、その名前への問い合わせを内蔵UDP DNSに渡します。親ドメインや子孫の名前までローカル扱いにはしません。ホスト名とIPの対応をLuaに複製して応答する処理は行いません。
 
@@ -107,7 +116,7 @@ python3 tools/build.py --config config/release.lua --output build/release/rtx-dn
 
 - 通常のINクラスQUERYを対象とします。1メッセージ1質問、既定の問い合わせ上限4,096バイト。完全なDNSリゾルバーやdnsmasqの全機能ではありません。
 - DNS UPDATE、AXFR/IXFR、TSIG/SIG(0)、EDNS TCP Keepaliveは拒否します。DNSSEC検証自体は行わず、対応する上流の回答を中継します。
-- DNSSEC、CD/AD、ECS、COOKIEなどの特別な応答はキャッシュを避けます。未知RRのデータは変更しませんが、未対応のRR内の名前を指す特殊な圧縮形式は拒否する場合があります。
+- DNSSEC、CD/AD、ECS、COOKIEなどの特別な応答はキャッシュを避けます。通常中継では未知RRのデータを変更しません。AAAAフィルターで再構築が必要な応答に未対応RRが残る場合は、安全に加工できないためSERVFAILにします。
 - IPv4の待受・上流を対象とします。IPv6接続、TLS、HTTPS、稼働中の家庭内ホスト登録の自動同期は含みません。
 - 過負荷時はSERVFAILまたは接続失敗になります。クライアントのTCP接続待ち時間は、完全な問い合わせ受信後に始まる5秒の期限には含まれません。
 - 期限判定はRTXの起動後経過秒数に基づき、秒単位です。

@@ -187,24 +187,19 @@ for _, source in ipairs({"invalid", "198.18.32.999", "198.18.032.1", "2001:db8::
     check(route == nil and type(err) == "string")
 end
 
--- Unsupported DNS selection syntax invalidates the entire snapshot, even if
--- another otherwise valid catch-all or fallback could answer the query.
+-- Broken input and ambiguous duplicate commands still reject the snapshot.
+-- Supported dynamic/IPv6 syntax and opaque rule barriers are covered in
+-- test_dynamic_policy.lua; they must not stop unrelated resolution.
 local bad_lines = {
-    "dns server", "dns server pp 1", "dns server dhcp lan1",
-    "dns server 2001:db8::1", "dns server 192.0.2.999", "dns server 192.00.2.1",
-    "dns server 192.0.2.1 nat46=1", "dns server 192.0.2.1 edns=maybe",
+    "dns server", "dns server pp", "dns server dhcp", "dns server pp lan1",
+    "dns server 192.0.2.999", "dns server 192.00.2.1",
     "dns server 192.0.2.1 192.0.2.1", "dns server 192.0.2.1 192.0.2.2 192.0.2.3 192.0.2.4 192.0.2.5",
     "dns server select", "dns server select 2147483648 192.0.2.1 any .",
-    "dns server select -1 192.0.2.1 any .", "dns server select 1 pp 1 any .",
-    "dns server select 1 dhcp lan1 any .", "dns server select 1 2001:db8::1 any .",
-    "dns server select 1 192.0.2.1 edns=maybe any .", "dns server select 1 192.0.2.1 nat46=1 any .",
-    "dns server select 1 192.0.2.1 any . restrict pp 1", "dns server select 1 192.0.2.1 any . 198.18.32.0/20 restrict pp 1",
+    "dns server select -1 192.0.2.1 any .", "dns server select 1 pp any .",
+    "dns server select 1 dhcp any .", "dns server select 1 192.0.2.1 any . restrict pp",
     "dns server select 1 192.0.2.1 192.0.2.2 192.0.2.3 any .", "dns server select 1 192.0.2.1",
-    "dns server select 1 192.0.2.1 txt example.com", "dns server select 1 192.0.2.1 any private-config-sentinel*",
     "dns server select 1 192.0.2.1 any . 198.18.32.0/33", "dns server select 1 192.0.2.1 any . 198.18.32.9-198.18.32.1",
-    "dns server select 1 192.0.2.1 ptr .", "dns server select 1 192.0.2.1 ptr 0.0.0.0/0",
-    "dns server select 1 reject ptr 198.18.32.1", "dns server select 1 reject ptr *.in-addr.arpa",
-    "dns server select 1 reject any bad*middle.example", "dns server select 1 reject",
+    "dns server select 1 reject", "dns server select 1 192.0.2.1 nat46=bad any .",
     "no dns server", "no dns server select 1", "no dns server dhcp lan1",
 }
 for _, line in ipairs(bad_lines) do
@@ -213,7 +208,9 @@ for _, line in ipairs(bad_lines) do
 end
 reject_config("dns server 1.1.1.1\ndns server 8.8.8.8")
 reject_config("dns server select 1 192.0.2.1 any .\ndns server select 01 192.0.2.2 any .")
-reject_config("# private-config-sentinel\nconsole prompt TEST")
+local implicit = parse("# private-config-sentinel\nconsole prompt TEST")
+check(implicit.dynamic and implicit.fallback.unavailable)
+no_secret(implicit)
 reject_config("dns server 1.1.1.1", {max_rules = 0})
 reject_config("dns server 1.1.1.1", {unknown_limit = 3})
 reject_config("dns server 1.1.1.1", "invalid limits")

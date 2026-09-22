@@ -5,6 +5,9 @@ PYTHON ?= python3
 test:
 	$(LUA) tests/test_wire_cache.lua
 	$(LUA) tests/test_dns_policy.lua
+	$(LUA) tests/test_dynamic_policy.lua
+	$(LUA) tests/test_dns_runtime.lua
+	$(LUA) tests/test_aaaa_filter.lua
 	$(LUA) tests/test_auto_config.lua
 	$(LUA) tests/test_policy_wire.lua
 	$(LUA) tests/test_main.lua

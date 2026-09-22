@@ -46,6 +46,8 @@ accepted_service('dns service recursive', 'legacy running option', {dns_config =
 accepted_service(' \tdns\tservice  recursive \t\r\n', 'whitespace and CRLF')
 accepted_service('# dns service off\r\n\n  dns service recursive\r\n', 'comments do not disable DNS')
 accepted_service('# dns service off\r\n', 'commented service still defaults to recursive')
+accepted_service('dns service fallback on', 'fallback on accepted')
+accepted_service('dns service fallback off', 'fallback off accepted')
 accepted_service('dns service aaaa filter on', 'separate aaaa command is not a service mode')
 accepted_service('dns service aaaa filter off\ndns service recursive', 'aaaa command with explicit mode')
 
@@ -108,9 +110,29 @@ for _, case in ipairs({
 }) do
   rejected_config(case[1] .. '\n' .. routes, case[2])
 end
-rejected_config('dns service recursive\ndns server select 10 dhcp lan1 any .', 'unsupported dynamic route')
-rejected_config('dns service recursive\ndns server select 10 ' .. secret .. ' any .', 'malformed route with secret')
-rejected_config('dns service recursive\n', 'recursive without any route')
+rejected_config('dns service recursive\ndns server select ' .. secret .. ' 192.0.2.1 any .', 'malformed rule id with secret')
+-- Dynamic source failure is query-local; startup and independent fixed routes survive.
+local dynamic_calls = {}
+local dynamic_runtime = {command = function(command)
+  dynamic_calls[#dynamic_calls + 1] = command
+  if command == 'show config' then return true, unrelated .. [[
+dns service fallback on
+dns service aaaa filter on
+dns server select 10 pp 1 any example.test
+dns server 192.0.2.1
+]] end
+  return false, secret
+end}
+local dynamic_policy, dynamic_error, _, refresh = main.read_policy({}, dynamic_runtime)
+check(dynamic_policy and not dynamic_error and type(refresh) == 'function', 'dynamic startup survives unavailable runtime')
+check(dynamic_policy.aaaa_filter == true, 'AAAA flag retained independently of fallback activation')
+check(dynamic_policy.routes[1].unavailable and #dynamic_policy.routes[1].upstreams == 0, 'unknown PP blocked')
+check(dynamic_policy.fallback.upstreams[1].host == '192.0.2.1', 'independent ordinary route remains available')
+check(not contains_secret(dynamic_policy), 'failed status details not retained')
+local before = #dynamic_calls
+refresh()
+check(#dynamic_calls > before, 'explicit refresh rereads dynamic status')
+for i = before + 1, #dynamic_calls do check(dynamic_calls[i] ~= 'show config', 'refresh never rereads config') end
 
 for _, failure in ipairs({'missing', 'failure', 'throw', 'no_text', 'non_text'}) do
   local runtime = {}

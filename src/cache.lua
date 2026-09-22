@@ -110,6 +110,11 @@ function Cache:put(q, policy, response, now)
     return true
 end
 
+function Cache:clear()
+    self.index, self.first, self.last = {}, nil, nil
+    self.count, self.bytes, self.ttl_fields = 0, 0, 0
+end
+
 function Cache:stats()
     local out = {entries = self.count, bytes = self.bytes,
         ttl_fields = self.ttl_fields, max_ttl_fields = self.max_ttl_fields,

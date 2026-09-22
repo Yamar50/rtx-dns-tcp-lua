@@ -2,16 +2,24 @@
 local M = {}
 local function service_mode(text)
   -- The documented router default is recursive, so show config may omit it.
-  local mode, seen = "recursive", false
+  local mode, seen, aaaa_filter = "recursive", false, false
+  local options = {}
   for line in (text .. "\n"):gmatch("(.-)\n") do
     local words = {}
     for word in line:gmatch("%S+") do words[#words + 1] = word end
     local negative = words[1] == "no"
     local first = negative and 2 or 1
     if words[first] == "dns" and words[first + 1] == "service" then
-      -- This is a separate setting, not the DNS service enable switch.
       if words[first + 2] == "aaaa" and words[first + 3] == "filter" then
-        -- No change to the IPv4 relay activation state.
+        if negative or options.aaaa or #words ~= 5 or (words[5] ~= "on" and words[5] ~= "off") then
+          return nil, "invalid or duplicate DNS AAAA filter setting"
+        end
+        aaaa_filter, options.aaaa = words[5] == "on", true
+      elseif words[first + 2] == "fallback" then
+        if negative or options.fallback or #words ~= 4 or (words[4] ~= "on" and words[4] ~= "off") then
+          return nil, "invalid or duplicate DNS service fallback setting"
+        end
+        options.fallback = true
       else
         if negative or seen or #words ~= 3
           or (words[3] ~= "recursive" and words[3] ~= "off") then
@@ -21,7 +29,7 @@ local function service_mode(text)
       end
     end
   end
-  return mode
+  return mode, nil, aaaa_filter
 end
 
 function M.read_policy(config, runtime)
@@ -44,7 +52,7 @@ function M.read_policy(config, runtime)
     return nil, "cannot read running DNS configuration"
   end
   if #text > 1048576 then return nil, "DNS policy configuration size limit" end
-  local service, service_error = service_mode(text)
+  local service, service_error, aaaa_filter = service_mode(text)
   if not service then return nil, service_error end
   if service == "off" then return nil, "dns service is off" end
   -- Only the parsed DNS routing descriptors survive. Never log the full config.
@@ -55,8 +63,20 @@ function M.read_policy(config, runtime)
     automatic, err = require("auto_config").parse(text)
     if not automatic then return nil, err end
   end
+  policy.aaaa_filter = aaaa_filter
+  local refresh
+  if policy.dynamic then
+    local reader, runtime_error = require("dns_runtime").new(text, runtime.command)
+    if not reader then return nil, runtime_error end
+    refresh = function()
+      reader:refresh()
+      return policy:refresh(reader)
+    end
+    refresh()
+    if policy.limit_error then return nil, policy.limit_error end
+  end
   text = nil
-  return policy, nil, automatic
+  return policy, nil, automatic, refresh
 end
 
 function M.start(config, runtime)
@@ -77,7 +97,7 @@ function M.start(config, runtime)
       until first > #message
     end
   end
-  local policy, policy_error, automatic = M.read_policy(config, runtime)
+  local policy, policy_error, automatic, refresh = M.read_policy(config, runtime)
   if policy_error then
     log("DNSRELAY startup failed " .. policy_error)
     error(policy_error)
@@ -92,7 +112,15 @@ function M.start(config, runtime)
       .. " local_names=" .. #config.local_names)
   end
   config.dns_policy = policy
-  if policy then log("DNSRELAY running DNS policy loaded routes=" .. #policy.routes) end
+  config.policy_refresh = refresh or config.policy_refresh
+  if policy then
+    log("DNSRELAY running DNS policy loaded routes=" .. #policy.routes)
+    for _, route in ipairs(policy.routes) do
+      if route.unavailable then
+        log("DNSRELAY route " .. route.policy_id .. " unavailable: " .. tostring(route.reason or "unknown"))
+      end
+    end
+  end
   config.sleep = function(seconds) runtime.sleep(seconds) end
   local cache = Cache.new(config.cache_entries or 256, config.cache_bytes or 1048576,
     config.cache_ttl_fields or 4096)

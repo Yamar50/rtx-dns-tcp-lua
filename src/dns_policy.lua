@@ -1,5 +1,5 @@
--- Read-only routing snapshot for static IPv4 Yamaha "dns server" commands.
--- All unsupported routing syntax fails closed; errors never include config.
+-- Yamaha DNS routing snapshot with refreshable PP/DHCP source state.
+-- Unknown routing semantics fail closed; diagnostics never include config.
 -- Lua 5.1 and Yamaha signed-integer Lua compatible; no 32-bit IPv4 arithmetic.
 local M = {}
 local Policy = {}
@@ -146,59 +146,299 @@ local function ptr_address(text)
     return ipv4(a .. "." .. b .. "." .. c .. "." .. d)
 end
 
-local function servers(words, position, maximum)
+-- IPv6 literals are accepted as configuration data; the current relay only
+-- supports IPv4 TCP. Normalize to eight groups for duplicate detection.
+local function ip_literal(value)
+    local _, host = ipv4(value)
+    if host then return host, 4 end
+    if type(value) ~= "string" or not value:find(":", 1, true) then return nil end
+    local text, zone = value:match("^([^%%]+)%%([^%%]+)$")
+    text = string.lower(text or value)
+    if zone then
+        zone = string.lower(zone)
+        if not (zone:match("^lan%d+$") or zone:match("^lan%d+[/.]%d+$")
+            or zone:match("^vlan%d+$") or zone:match("^wan%d+$") or zone:match("^bridge%d+$")
+            or decimal(zone, 2147483647)) then return nil end
+    end
+    if text:find(".", 1, true) then
+        local start, tail = text:match("^(.*:)([^:]+)$")
+        local bytes = ipv4(tail)
+        if not bytes then return nil end
+        text = start .. string.format("%x:%x", bytes[1] * 256 + bytes[2], bytes[3] * 256 + bytes[4])
+    end
+    if text:find("[^0-9a-f:]") or text:find(":::", 1, true) then return nil end
+    local left, right = text:match("^(.-)::(.-)$")
+    if left and right:find("::", 1, true) then return nil end
+    local function groups(part)
+        local out = {}
+        if part == "" then return out end
+        if part:sub(1, 1) == ":" or part:sub(-1) == ":" then return nil end
+        for group in part:gmatch("[^:]+") do
+            if #group > 4 then return nil end
+            out[#out + 1] = string.format("%x", tonumber(group, 16))
+        end
+        return out
+    end
+    local a, b = groups(left or text), groups(right or "")
+    if not a or not b then return nil end
+    if left then
+        local missing = 8 - #a - #b
+        if missing < 1 then return nil end
+        for _ = 1, missing do a[#a + 1] = "0" end
+        for _, group in ipairs(b) do a[#a + 1] = group end
+    elseif #a ~= 8 then return nil end
+    return table.concat(a, ":") .. (zone and "%" .. zone or ""), 6
+end
+
+local function interface(value)
+    return type(value) == "string" and (value:match("^lan%d+$")
+        or value:match("^wan%d*$") or value:match("^bridge%d+$")) and value or nil
+end
+
+local function options(words, p, descriptor)
+    while words[p] and words[p]:find("=", 1, true) do
+        local word = words[p]
+        if word == "edns=on" or word == "edns=off" then
+            if descriptor.edns_seen then return nil, "duplicate DNS option" end
+            descriptor.edns, descriptor.edns_seen = word == "edns=on", true
+        elseif word:match("^nat46=") then
+            if descriptor.nat46 then return nil, "duplicate DNS option" end
+            local n = decimal(word:sub(7), 2147483647)
+            if not n then return nil, "invalid NAT46 tunnel number" end
+            descriptor.nat46 = n
+        else descriptor.unsupported = true end
+        p = p + 1
+    end
+    return p
+end
+
+local function servers(words, p, maximum)
     local out, seen = {}, {}
-    while position <= #words do
-        local _, host = ipv4(words[position])
+    while p <= #words do
+        local host, family = ip_literal(words[p])
         if not host then break end
         if #out >= maximum then return nil, "too many DNS servers" end
         if seen[host] then return nil, "duplicate DNS server in route" end
-        local descriptor = {host = host, port = 53, edns = false}
+        local descriptor = {host = host, family = family, port = 53, edns = false}
         seen[host] = true
+        local next_p, err = options(words, p + 1, descriptor)
+        if not next_p then return nil, err end
+        p = next_p
         out[#out + 1] = descriptor
-        position = position + 1
-        local option = words[position]
-        if option == "edns=on" or option == "edns=off" then
-            descriptor.edns = option == "edns=on"
-            position = position + 1
-        end
     end
-    if #out == 0 then return nil, "static IPv4 DNS server required" end
-    return out, position
+    return out, p
+end
+
+local function source_spec(words, p, selecting)
+    local kind = words[p]
+    if kind == "pp" or kind == "dhcp" then
+        local id
+        if kind == "pp" then id = decimal(words[p + 1], 2147483647)
+        else id = interface(words[p + 1]) end
+        if not id then return nil, "invalid dynamic DNS source" end
+        local spec = {kind = kind, id = tostring(id), edns = false}
+        local next_p, err = options(words, p + 2, spec)
+        if not next_p then return nil, err end
+        if selecting then
+            local candidates
+            candidates, next_p = servers(words, next_p, 1)
+            if not candidates then return nil, next_p end
+            spec.defaults = candidates
+        end
+        return spec, next_p
+    end
+    local candidates, next_p = servers(words, p, selecting and 2 or 4)
+    if not candidates then return nil, next_p end
+    if #candidates == 0 then
+        if not kind then return nil, "missing DNS server" end
+        if kind:match("^[%d%.:]+$") then return nil, "invalid DNS server address" end
+        return {kind = "opaque", unsupported = true}, p
+    end
+    return {kind = "fixed", candidates = candidates}, next_p
 end
 
 local function selection_rule(words)
     local id = decimal(words[4], 2147483647)
     if not id then return nil, "invalid selection rule number" end
     local route = {policy_id = "select:" .. tostring(id), rule_id = id, upstreams = {}}
-    local p = 5
-    if words[p] == "reject" then route.reject = true; p = p + 1
+    local rule = {id = id, route = route}
+    local p, err = 5
+    if words[p] == "reject" then
+        route.reject = true
+        route.spec = {kind = "reject"}
+        p = p + 1
     else
-        local parsed, next_p = servers(words, p, 2)
-        if not parsed then return nil, next_p end
-        route.upstreams, p = parsed, next_p
-    end
-    local qtype = 1
-    if types[words[p]] ~= nil then qtype = types[words[p]]; p = p + 1 end
-    if route.reject and qtype == 12 then return nil, "reject PTR selection is unsupported" end
-    if not words[p] then return nil, "missing selection query pattern" end
-    local matcher, err
-    if qtype == 12 then
-        matcher, err = address_matcher(words[p], false)
-        if matcher and matcher.kind == "prefix" and matcher.prefix == 0 then
-            return nil, "all-address PTR selection is unsupported"
+        route.spec, p = source_spec(words, p, true)
+        if not route.spec then return nil, p end
+        if route.spec.kind == "opaque" then
+            rule.opaque = true
+            -- Unknown source grammar has no trustworthy token boundary.
+            -- A later familiar-looking word may be an argument to that source.
+            return rule
         end
-    else matcher, err = plain_pattern(words[p], route.reject) end
-    if not matcher then return nil, err end
+    end
+    rule.qtype = 1
+    if types[words[p]] ~= nil then rule.qtype = types[words[p]]; p = p + 1 end
+    if not words[p] then return nil, "missing selection query pattern" end
+    if rule.qtype == 12 then
+        rule.matcher, err = address_matcher(words[p], false)
+        if rule.matcher and rule.matcher.kind == "prefix" and rule.matcher.prefix == 0 then
+            rule.matcher, rule.opaque = nil, true
+        elseif not rule.matcher then
+            -- IPv6 PTR ranges and future PTR forms cannot be evaluated safely.
+            if words[p]:find(":", 1, true) or words[p]:find("*", 1, true) or words[p] == "." then
+                rule.opaque = true
+            else return nil, err end
+        end
+    else
+        rule.matcher, err = plain_pattern(words[p], route.reject)
+        if not rule.matcher then rule.opaque = true end
+    end
     p = p + 1
-    local source
-    if words[p] then
-        source, err = address_matcher(words[p], true)
-        if not source then return nil, err end
+    if words[p] and words[p] ~= "restrict" then
+        rule.source, err = address_matcher(words[p], true)
+        if not rule.source then
+            if words[p]:match("^[%d%./%-]+$") then return nil, err end
+            rule.opaque = true
+            -- This could instead be an unknown record type followed by its
+            -- query. Do not use an assumed A/name pair to skip such a rule.
+            if rule.qtype == 1 and types[words[p - 2]] == nil then
+                rule.qtype, rule.matcher = nil, nil
+            end
+        end
         p = p + 1
     end
-    if p <= #words then return nil, "unsupported selection options" end
-    return {id = id, qtype = qtype, matcher = matcher, source = source, route = route}
+    if words[p] == "restrict" then
+        if words[p + 1] == "pp" then
+            local pp = decimal(words[p + 2], 2147483647)
+            if not pp then return nil, "invalid restrict PP number" end
+            rule.restrict_pp = tostring(pp)
+            p = p + 3
+            if route.reject then rule.opaque = true end
+        else rule.opaque = true end
+    end
+    if p <= #words then rule.opaque = true end
+    return rule
+end
+
+local function usable(candidates)
+    local out, seen = {}, {}
+    for _, candidate in ipairs(candidates or {}) do
+        if candidate.unsupported then return {}, "unsupported DNS option" end
+        if candidate.nat46 then return {}, "NAT46 transformation unsupported" end
+        if candidate.family == 4 then
+            if not seen[candidate.host] then
+                out[#out + 1] = {host = candidate.host, port = 53, edns = candidate.edns == true}
+                seen[candidate.host] = true
+            end
+        end
+    end
+    if #out == 0 then return out, "IPv6 DNS transport unsupported" end
+    return out
+end
+
+local function source(runtime, kind, id)
+    if type(runtime) ~= "table" or type(runtime.source) ~= "function" then
+        return {state = "unknown", reason = "DNS source state unavailable"}
+    end
+    local ok, state = pcall(runtime.source, runtime, kind, id)
+    if not ok or type(state) ~= "table" or (state.state ~= "present" and state.state ~= "absent") then
+        return {state = "unknown", reason = "DNS source state unknown"}
+    end
+    return state
+end
+
+local function resolve(spec, runtime, ordinary)
+    if spec.kind == "reject" then return {}, nil, "reject" end
+    if spec.kind == "opaque" or spec.unsupported then return {}, "unsupported DNS source", "unknown" end
+    if spec.kind == "fixed" then
+        local out, reason = usable(spec.candidates)
+        return out, reason, reason and "unsupported" or "present"
+    end
+    local state = source(runtime, spec.kind, spec.id)
+    if state.state == "unknown" then return {}, state.reason, "unknown" end
+    if state.state == "absent" then
+        if spec.defaults and #spec.defaults > 0 then
+            local out, reason = usable(spec.defaults)
+            return out, reason, reason and "unsupported" or "default"
+        end
+        if spec.kind == "dhcp" and ordinary then
+            return ordinary.upstreams, ordinary.reason, "ordinary"
+        end
+        return {}, "DNS source has no acquired servers", "absent"
+    end
+    if type(state.servers) ~= "table" or #state.servers == 0 or #state.servers > 4 then
+        return {}, "invalid acquired DNS server list", "unknown"
+    end
+    local candidates = {}
+    for _, value in ipairs(state.servers) do
+        local host, family = ip_literal(value)
+        if not host then return {}, "invalid acquired DNS server", "unknown" end
+        candidates[#candidates + 1] = {host = host, family = family, edns = spec.edns, nat46 = spec.nat46}
+    end
+    local out, reason = usable(candidates)
+    return out, reason, reason and "unsupported" or "present"
+end
+
+local function signature(route)
+    local out = {route.reason or "", route.status or "", route.restrict_state or "",
+        route.unavailable and "unavailable" or "available"}
+    for _, endpoint in ipairs(route.upstreams) do
+        out[#out + 1] = endpoint.host .. ":" .. endpoint.port .. ":" .. tostring(endpoint.edns)
+    end
+    return table.concat(out, "|")
+end
+
+function Policy:refresh(runtime)
+    local before, changed, diagnostics = {}, false, {}
+    for _, route in ipairs(self.routes) do before[route] = signature(route) end
+    local function assign(route, ordinary)
+        route.upstreams, route.reason, route.status = resolve(route.spec, runtime, ordinary)
+        route.unavailable = route.reason ~= nil
+    end
+    if self.fallback then assign(self.fallback) end
+    for _, rule in ipairs(self.rules) do
+        local route = rule.route
+        assign(route, self.fallback)
+        if rule.restrict_pp then
+            local ok, state = false, nil
+            if type(runtime) == "table" and type(runtime.pp_state) == "function" then
+                ok, state = pcall(runtime.pp_state, runtime, rule.restrict_pp)
+            end
+            route.restrict_state = ok and (state == "up" or state == "down") and state or "unknown"
+        end
+        if rule.opaque or route.restrict_state == "unknown" then
+            route.upstreams = {}
+            route.unavailable = true
+            route.reason = rule.opaque and "unsupported selection condition" or "restrict PP state unknown"
+        end
+        -- Unsupported reject conditions must SERVFAIL, not drop a query on
+        -- a condition that was never established.
+        route.reject = route.spec.kind == "reject" and not route.unavailable
+    end
+    local endpoints, count = {}, 0
+    for _, route in ipairs(self.routes) do
+        for _, endpoint in ipairs(route.upstreams) do
+            local key = endpoint.host .. ":" .. endpoint.port
+            if not endpoints[key] then endpoints[key] = true; count = count + 1 end
+        end
+    end
+    self.limit_error = nil
+    if count > self.limits.max_endpoints then
+        self.limit_error = "unique DNS endpoint count limit"
+        for _, route in ipairs(self.routes) do
+            if not route.reject then
+                route.upstreams, route.unavailable, route.reason = {}, true, self.limit_error
+            end
+        end
+        count = 0
+    end
+    self.endpoint_count = count
+    for _, route in ipairs(self.routes) do
+        if before[route] ~= signature(route) then changed = true end
+        if route.unavailable then diagnostics[#diagnostics + 1] = route.policy_id .. ": " .. route.reason end
+    end
+    return changed, diagnostics
 end
 
 function M.parse(config_text, limits)
@@ -213,7 +453,8 @@ function M.parse(config_text, limits)
         cfg[key] = value
     end
     if #config_text > cfg.max_config_bytes then return nil, "DNS policy configuration size limit" end
-    local rules, ids, fallback, line_number = {}, {}, nil, 0
+    if config_text:find("[%z\1-\8\11\12\14-\31\127]") then return nil, "invalid configuration control character" end
+    local rules, ids, ordinary, line_number, dynamic, command_count = {}, {}, {}, 0, false, 0
     local function failure(reason)
         return nil, "DNS policy line " .. line_number .. ": " .. reason
     end
@@ -223,6 +464,7 @@ function M.parse(config_text, limits)
         local words = {}
         for word in line:gmatch("%S+") do words[#words + 1] = word end
         if words[1] == "dns" and words[2] == "server" then
+            command_count = command_count + 1
             if #line > cfg.max_line_bytes then return failure("DNS command length limit") end
             if words[3] == "select" then
                 if #rules >= cfg.max_rules then return failure("selection rule count limit") end
@@ -231,48 +473,67 @@ function M.parse(config_text, limits)
                 if ids[rule.id] then return failure("duplicate selection rule number") end
                 ids[rule.id] = true
                 rules[#rules + 1] = rule
+                if rule.restrict_pp or rule.route.spec.kind == "pp" or rule.route.spec.kind == "dhcp" then dynamic = true end
             else
-                if fallback then return failure("duplicate fallback DNS command") end
-                local parsed, next_p = servers(words, 3, 4)
-                if not parsed then return failure(next_p) end
-                if next_p <= #words then return failure("unsupported fallback DNS options") end
-                fallback = {policy_id = "default", upstreams = parsed, fallback = true}
+                local spec, next_p = source_spec(words, 3, false)
+                if not spec then return failure(next_p) end
+                if next_p <= #words then spec.unsupported = true end
+                if ordinary[spec.kind] then return failure("duplicate ordinary DNS command") end
+                ordinary[spec.kind] = spec
+                if spec.kind == "pp" or spec.kind == "dhcp" then dynamic = true end
             end
         elseif words[1] == "no" and words[2] == "dns" and words[3] == "server" then
             return failure("negative DNS server commands are unsupported in a snapshot")
         end
     end
     table.sort(rules, function(a, b) return a.id < b.id end)
-    local routes, endpoints, endpoint_count = {}, {}, 0
+    local routes, fallback = {}, nil
     for _, rule in ipairs(rules) do routes[#routes + 1] = rule.route end
-    if fallback then routes[#routes + 1] = fallback end
-    if #routes == 0 then return nil, "no static DNS routes configured" end
-    for _, route in ipairs(routes) do
-        for _, upstream in ipairs(route.upstreams) do
-            local key = upstream.host .. ":" .. upstream.port
-            if not endpoints[key] then endpoints[key] = true; endpoint_count = endpoint_count + 1 end
+    local chosen = ordinary.opaque or ordinary.fixed or ordinary.pp or ordinary.dhcp
+    if command_count == 0 then chosen = {kind = "dhcp", id = "auto", edns = false}; dynamic = true end
+    if chosen then
+        fallback = {policy_id = "default", upstreams = {}, fallback = true, spec = chosen}
+        routes[#routes + 1] = fallback
+    end
+    -- Count all configured IPv4 endpoints, including inactive lower-priority
+    -- sources and inline alternatives, so oversized input is rejected at boot.
+    local endpoints, endpoint_count = {}, 0
+    local function count_spec(spec)
+        for _, list in ipairs({spec.candidates or {}, spec.defaults or {}}) do
+            for _, candidate in ipairs(list) do
+                if candidate.family == 4 and not endpoints[candidate.host] then
+                    endpoints[candidate.host] = true; endpoint_count = endpoint_count + 1
+                end
+            end
         end
     end
+    for _, rule in ipairs(rules) do count_spec(rule.route.spec) end
+    for _, spec in pairs(ordinary) do count_spec(spec) end
     if endpoint_count > cfg.max_endpoints then return nil, "unique DNS endpoint count limit" end
-    return setmetatable({rules = rules, routes = routes, fallback = fallback,
-        endpoint_count = endpoint_count, limits = cfg}, Policy)
+    local policy = setmetatable({rules = rules, routes = routes, fallback = fallback,
+        ordinary = ordinary, endpoint_count = endpoint_count, limits = cfg, dynamic = dynamic}, Policy)
+    policy:refresh(nil)
+    return policy
 end
 
 function Policy:select(query, client_address)
-    local source = ipv4(client_address)
-    if not source then return nil, "invalid client IPv4 address" end
+    local sender = ipv4(client_address)
+    if not sender then return nil, "invalid client IPv4 address" end
     local text, err = query_text(query)
     if not text then return nil, err end
     local reverse = query.qtype == 12 and ptr_address(text) or nil
     for _, rule in ipairs(self.rules) do
-        if (rule.qtype == 0 or rule.qtype == query.qtype) and address_matches(source, rule.source) then
-            local matched
-            if rule.qtype == 12 then matched = reverse and address_matches(reverse, rule.matcher)
-            else matched = text_matches(text, rule.matcher) end
+        if (not rule.qtype or rule.qtype == 0 or rule.qtype == query.qtype)
+            and address_matches(sender, rule.source) and rule.route.restrict_state ~= "down" then
+            local matched = not rule.matcher
+            if rule.matcher then
+                if rule.qtype == 12 then matched = reverse and address_matches(reverse, rule.matcher)
+                else matched = text_matches(text, rule.matcher) end
+            end
             if matched then return rule.route end
         end
     end
-    if not self.fallback then return nil, "no matching static DNS route or fallback" end
+    if not self.fallback then return nil, "no matching DNS route or fallback" end
     return self.fallback
 end
 

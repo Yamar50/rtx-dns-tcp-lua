@@ -171,6 +171,7 @@ local function policy_cache()
     self.inserts[#self.inserts + 1] = policy
     self.entries[policy .. ":" .. q.name] = raw
   end
+  function cache:clear() self.entries = {}; self.clears = (self.clears or 0) + 1 end
   return cache
 end
 
@@ -653,7 +654,7 @@ function tests.policy_cache_is_separate_and_uses_original_client_address()
   local hosts = {}
   for _, request in ipairs(env.upstream_requests) do hosts[request.host] = true end
   assert(hosts["198.18.32.30"] and hosts["198.18.32.31"])
-  assert(cache.entries["source_a:example.test."] and cache.entries["source_b:example.test."])
+  assert(cache.entries["source_a:generation:1:example.test."] and cache.entries["source_b:generation:1:example.test."])
   ca.output, cb.output = "", ""
   ca.input, cb.input = frame(query(303)), frame(query(304))
   until_true(r, function() return #ca.output > 0 and #cb.output > 0 end)
@@ -675,12 +676,12 @@ function tests.policy_is_frozen_on_job_and_cannot_change_cache_namespace()
   local ep = r.endpoints[1]
   ep.socket.input = frame(answer(env.upstream_requests[1].raw))
   until_true(r, function() return #c.output > 0 end)
-  eq(cache.inserts[1], "original")
+  eq(cache.inserts[1], "original:generation:1")
   eq(ep.host, "198.18.32.30")
   c.output, c.input = "", frame(query(306))
   until_true(r, function() return #c.output > 0 end)
   eq(env.upstream_queries, 1)
-  eq(cache.lookups[#cache.lookups], "original")
+  eq(cache.lookups[#cache.lookups], "original:generation:1")
   r:close()
 end
 
@@ -926,6 +927,116 @@ function tests.policy_response_transform_failure_is_final_servfail()
   eq(env.upstream_queries, 1)
   eq(r.endpoints[1].failures, 0, "valid upstream communication is not a transport fault")
   eq(#cache.inserts, 0)
+  eq(r:stats_snapshot().failure_response_transform, 1)
+  r:close()
+end
+
+function tests.actual_aaaa_filter_preserves_source_policy_and_native_delegation()
+  local Policy, real_wire, Cache = require("dns_policy"), require("dns_wire"), require("cache")
+  local policy = assert(Policy.parse("dns server select 10 198.18.32.30 any . 198.18.32.1-198.18.32.254\n"
+    .. "dns server select 20 198.18.32.31 any .\n"))
+  policy.aaaa_filter = true
+  local function make_query(value, kind, name)
+    return u16(value) .. "\1\0\0\1\0\0\0\0\0\0"
+      .. canonical_name(name or "external.example.test") .. u16(kind) .. "\0\1"
+  end
+  local env = mock({respond = function(s, raw)
+    local q = assert(real_wire.parse_query(raw))
+    local header = raw:sub(1, 2) .. "\129\128\0\1"
+    local records
+    if q.qtype == 28 then
+      local target = canonical_name("target.example.test")
+      header = raw:sub(1, 2) .. "\129\160\0\1\0\2\0\0\0\0"
+      records = "\192\12\0\5\0\1\0\0\0\60" .. u16(#target) .. target
+        .. target .. "\0\28\0\1\0\0\0\60\0\16" .. string.rep("\0", 15) .. "\1"
+    else
+      header = header .. "\0\1\0\0\0\0"
+      records = "\192\12\0\1\0\1\0\0\0\60\0\4\192\0\2\37"
+    end
+    s.input = s.input .. frame(header .. q.question .. records)
+  end})
+  local native_response, create_udp = nil, env.api.udp
+  env.api.udp = function()
+    local socket = create_udp()
+    function socket:sendto(raw, host, port)
+      local q = assert(real_wire.parse_query(raw))
+      native_response = raw:sub(1, 2) .. "\129\131\0\1\0\0\0\1\0\0" .. q.question
+        .. "\192\12\0\6\0\1\0\0\0\60\0\24\192\12\192\12" .. string.rep("\0", 20)
+      self.udp_response, self.remote_host, self.remote_port = native_response, host, port
+      env.udp_count = env.udp_count + 1
+      return #raw
+    end
+    return socket
+  end
+  local filter_calls, implementation = 0, {}
+  for key, value in pairs(real_wire) do implementation[key] = value end
+  implementation.filter_aaaa = function(raw)
+    filter_calls = filter_calls + 1
+    return real_wire.filter_aaaa(raw)
+  end
+  local cache, puts = Cache.new(256, 1048576), 0
+  local original_put = cache.put
+  cache.put = function(self, ...)
+    puts = puts + 1
+    return original_put(self, ...)
+  end
+  local r = relay(env, {dns_policy = policy, local_zones = {}, local_names = {"local.example.test"}}, cache, implementation)
+  for _, item in ipairs({{731, "198.18.32.30", "198.18.32.30"}, {732, "198.18.40.2", "198.18.32.31"},
+    {733, "198.18.32.30", "198.18.32.30"}}) do
+    local raw = make_query(item[1], 28)
+    local c = env.client(raw, item[2])
+    until_true(r, function() return #c.output > 0 end)
+    local parsed = assert(real_wire.validate_response(c.output:sub(3), assert(real_wire.parse_query(raw))))
+    eq(parsed.ancount, 1, "CNAME is retained while AAAA is filtered")
+    eq(parsed.records[1].rtype, 5)
+    eq(parsed.ad, false)
+    eq(env.upstream_requests[#env.upstream_requests].host, item[3], "original client source selects the DNS server")
+  end
+  eq(env.upstream_queries, 3, "modified AAAA response is never a cache hit")
+  eq(filter_calls, 3)
+  eq(puts, 0, "modified replies bypass cache insertion, not only cache eligibility")
+  eq(cache:stats().entries, 0)
+  local raw = make_query(734, 1)
+  local a = env.client(raw, "198.18.40.2")
+  until_true(r, function() return #a.output > 0 end)
+  eq(puts, 1)
+  eq(cache:stats().entries, 1, "unmodified A replies remain cacheable")
+  a.output, a.input = "", frame(make_query(735, 1))
+  until_true(r, function() return #a.output > 0 end)
+  eq(env.upstream_queries, 4, "A reply uses its existing policy cache")
+  eq(filter_calls, 3, "filter applies only to AAAA")
+  local local_raw = make_query(736, 28, "local.example.test")
+  local c = env.client(local_raw, "198.18.40.2")
+  until_true(r, function() return #c.output > 0 end)
+  eq(c.output, frame(native_response), "native NXDOMAIN/SOA reply is passed through byte for byte")
+  eq(env.udp_count, 1)
+  eq(filter_calls, 3, "native DNS performs its own AAAA filtering")
+  eq(puts, 1, "local native response bypasses cache")
+  eq(env.upstream_queries, 4, "native delegation does not create an external TCP request")
+  r:close()
+end
+
+function tests.actual_aaaa_filter_failure_is_query_local_and_does_not_retry_another_server()
+  local real_wire = require("dns_wire")
+  local route = {policy_id = "filtered", upstreams = {{host = "198.18.32.30", port = 15353},
+    {host = "198.18.32.31", port = 15353}}}
+  local policy = route_policy({route}, function() return route end)
+  policy.aaaa_filter = true
+  local env = mock({respond = function(s, raw)
+    local q = assert(real_wire.parse_query(raw))
+    local aaaa = "\192\12\0\28\0\1\0\0\0\60\0\16" .. string.rep("\0", 16)
+    local unknown = "\192\12\255\0\0\1\0\0\0\60\0\2\192\12"
+    s.input = s.input .. frame(raw:sub(1, 2) .. "\129\128\0\1\0\2\0\0\0\0" .. q.question .. aaaa .. unknown)
+  end})
+  local r = relay(env, {dns_policy = policy}, nil, real_wire)
+  local raw = u16(737) .. "\1\0\0\1\0\0\0\0\0\0" .. canonical_name("external.example.test") .. "\0\28\0\1"
+  local c = env.client(raw)
+  until_true(r, function() return #c.output > 0 end)
+  eq(assert(real_wire.validate_response(c.output:sub(3), assert(real_wire.parse_query(raw)))).rcode, 2)
+  eq(env.upstream_queries, 1)
+  eq(#env.tcp_dials, 1, "unsupported rewrite must not become upstream failover")
+  eq(r.endpoints[1].failures, 0, "valid DNS transport remains healthy")
+  eq(r.endpoints[2].socket, nil)
   eq(r:stats_snapshot().failure_response_transform, 1)
   r:close()
 end
@@ -1189,6 +1300,92 @@ function tests.query_bucket_handles_rate_above_burst_and_large_clock_jump()
   recovered.output, recovered.input = "", frame(query(1904))
   until_true(r, function() return recovered.closed end)
   eq(recovered.output, frame(wire.error_response(query(1904), 2)), "refill never exceeds burst capacity")
+  r:close()
+end
+
+function tests.runtime_refresh_discards_old_jobs_connections_and_cache()
+  local route = {policy_id = "dynamic", upstreams = {{host = "198.18.32.30", port = 15353}}}
+  local policy = route_policy({route}, function() return route end)
+  local env, cache = mock({respond = function() end}), policy_cache()
+  local refreshes = 0
+  local r = relay(env, {dns_policy = policy, client_read_timeout = 100,
+    total_timeout = 100, response_timeout = 100,
+    policy_refresh = function()
+      refreshes = refreshes + 1
+      if refreshes == 1 then return false end
+      route.upstreams = {{host = "198.18.32.31", port = 15353}}
+      return true
+    end}, cache)
+  local client = env.client(query(2001))
+  until_true(r, function() return env.upstream_queries == 1 end)
+  local old = r.endpoints[1].socket
+  env.time = 30; r.now = r:_clock(); r:_timers()
+  eq(refreshes, 1); eq(r.generation, 1); eq(old.closed, nil)
+  env.time = 60; r.now = r:_clock(); r:_timers()
+  eq(refreshes, 2); eq(r.generation, 2); eq(old.closed, true)
+  eq(r.pending, 0); eq(cache.clears, 1); eq(#cache.inserts, 0)
+  eq(r.endpoints[1].host, "198.18.32.31")
+  r:_client_write(r.clients[client])
+  eq(client.output, frame(wire.error_response(query(2001), 2)))
+  client.output, client.input = "", frame(query(2002))
+  until_true(r, function() return env.upstream_queries == 2 end)
+  eq(env.upstream_requests[2].host, "198.18.32.31")
+  local fresh = r.endpoints[1].socket
+  fresh.input = frame(answer(env.upstream_requests[2].raw))
+  until_true(r, function() return #client.output > 0 end)
+  eq(cache.inserts[1], "dynamic:generation:2")
+  r:close()
+end
+
+function tests.runtime_refresh_ignores_old_socket_readiness_returned_by_select()
+  local route = {policy_id = "dynamic", upstreams = {{host = "198.18.32.30", port = 15353}}}
+  local policy = route_policy({route}, function() return route end)
+  local env, cache = mock({respond = function() end}), policy_cache()
+  local refreshed = false
+  local r = relay(env, {dns_policy = policy, client_read_timeout = 100,
+    total_timeout = 100, response_timeout = 100,
+    policy_refresh = function()
+      if refreshed then return false end
+      refreshed = true
+      route.upstreams = {{host = "198.18.32.31", port = 15353}}
+      return true
+    end}, cache)
+  local client = env.client(query(2005))
+  until_true(r, function() return env.upstream_queries == 1 end)
+  local old = r.endpoints[1].socket
+  old.input = frame(answer(env.upstream_requests[1].raw))
+  -- select returns readiness for the old endpoint while crossing the refresh
+  -- deadline. The post-select timers replace the policy before dispatch.
+  env.select_advance = 30 - env.time
+  steps(r, 1)
+  env.select_advance = 0
+  eq(old.closed, true)
+  eq(r.generation, 2)
+  eq(r:stats_snapshot().upstream_responses, nil, "old readiness cannot complete a response")
+  eq(#cache.inserts, 0, "old response cannot enter the refreshed cache")
+  until_true(r, function() return #client.output > 0 end)
+  eq(client.output, frame(wire.error_response(query(2005), 2)))
+  eq(r.endpoints[1].host, "198.18.32.31")
+  r:close()
+end
+
+function tests.unavailable_route_servfails_without_dial_and_refresh_recovers()
+  local route = {policy_id = "dynamic", upstreams = {}, unavailable = true}
+  local policy = route_policy({route}, function() return route end)
+  local env = mock()
+  local r = relay(env, {dns_policy = policy, policy_refresh = function()
+    route.upstreams, route.unavailable = {{host = "198.18.32.30", port = 15353}}, nil
+    return true
+  end})
+  local client = env.client(query(2010))
+  until_true(r, function() return #client.output > 0 end)
+  eq(client.output, frame(wire.error_response(query(2010), 2)))
+  eq(#env.tcp_dials, 0)
+  env.time = 30; r.now = r:_clock(); r:_timers()
+  local recovered = env.client(query(2011))
+  until_true(r, function() return #recovered.output > 0 end)
+  eq(recovered.output, frame(answer(query(2011))))
+  eq(#env.tcp_dials, 1)
   r:close()
 end
 

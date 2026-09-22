@@ -180,6 +180,30 @@ function Relay.new(config, socket_api, logfn, wire, cache)
   for _, zone in ipairs(cfg.local_zones) do self.local_zones[#self.local_zones + 1] = canonical_zone(zone) end
   for _, name in ipairs(cfg.local_names) do self.local_names[canonical_zone(name)] = true end
   self.started, self.token_time, self.next_stats = self.now, self.now, self.now + cfg.stats_interval
+  self.generation = 1
+  self.next_policy_refresh = self.now + 30
+  self:_load_routes()
+  local listener, err = socket_api.tcp()
+  assert(listener, "listener socket: " .. tostring(err))
+  local ok
+  ok, err = call(listener, "settimeout", 0)
+  if not ok then close(listener); error("listener timeout: " .. tostring(err)) end
+  ok, err = call(listener, "bind", cfg.listen_host, cfg.listen_port)
+  if not ok then close(listener); error("listener bind: " .. tostring(err)) end
+  ok, err = call(listener, "listen", cfg.backlog)
+  if not ok then close(listener); error("listener listen: " .. tostring(err)) end
+  self.listener = listener
+  self:_event("start", "listening " .. cfg.listen_host .. ":" .. cfg.listen_port)
+  return self
+end
+
+-- Build an immutable routing view for this generation.
+function Relay:_load_routes()
+  local cfg = self.cfg
+  local function valid_port(port)
+    return type(port) == "number" and port >= 1 and port <= 65535 and port % 1 == 0
+  end
+  self.routes, self.endpoints = {}, {}
   local declared_routes = cfg.dns_policy and cfg.dns_policy.routes
     or { { policy_id = tostring(cfg.policy_id), upstreams = cfg.upstreams } }
   assert(#declared_routes <= 257, "at most 256 policy rules plus one fallback are supported")
@@ -189,11 +213,13 @@ function Relay.new(config, socket_api, logfn, wire, cache)
     assert(not policy_ids[route.policy_id], "route policy_id must be unique")
     policy_ids[route.policy_id] = true
     assert(type(route.upstreams) == "table", "route upstreams must be a table")
-    assert((route.reject and #route.upstreams == 0)
+    assert(((route.reject or route.unavailable) and #route.upstreams == 0)
       or (not route.reject and #route.upstreams >= 1 and #route.upstreams <= 4), "route requires one to four upstreams or reject")
     -- Copy route metadata so an in-flight query's namespace and allowed peers
     -- cannot change if the caller later modifies its configuration table.
-    local state = { policy_id = route.policy_id, reject = route.reject, entries = {} }
+    local state = { policy_id = route.policy_id .. ":generation:" .. self.generation,
+      event_id = route.policy_id, reason = route.reason,
+      reject = route.reject, unavailable = route.unavailable, entries = {} }
     local route_peers = {}
     for _, upstream in ipairs(route.upstreams) do
       assert(ipv4(upstream.host), "upstream.host must be an IPv4 address")
@@ -217,18 +243,6 @@ function Relay.new(config, socket_api, logfn, wire, cache)
     self.routes[route] = state
     if not cfg.dns_policy then self.default_route = state end
   end
-  local listener, err = socket_api.tcp()
-  assert(listener, "listener socket: " .. tostring(err))
-  local ok
-  ok, err = call(listener, "settimeout", 0)
-  if not ok then close(listener); error("listener timeout: " .. tostring(err)) end
-  ok, err = call(listener, "bind", cfg.listen_host, cfg.listen_port)
-  if not ok then close(listener); error("listener bind: " .. tostring(err)) end
-  ok, err = call(listener, "listen", cfg.backlog)
-  if not ok then close(listener); error("listener listen: " .. tostring(err)) end
-  self.listener = listener
-  self:_event("start", "listening " .. cfg.listen_host .. ":" .. cfg.listen_port)
-  return self
 end
 
 function Relay:_clock()
@@ -340,7 +354,7 @@ end
 
 function Relay:_finish(job, raw, cache_response)
   if not self.jobs[job.serial] then return end
-  if cache_response and self.cache then
+  if cache_response and self.cache and job.generation == self.generation then
     self.cache:put(job.query, job.policy_id, raw, self.now)
   end
   self:_remove_job(job)
@@ -577,7 +591,10 @@ function Relay:_query(client, raw)
       self:_inc("policy_rejects")
       return
     end
-    if not route then
+    if not route or route.unavailable then
+      self:_event("policy_unavailable_" .. (route and route.event_id or "none"),
+        "DNS route " .. (route and route.event_id or "unmatched") .. " unavailable: "
+        .. tostring(route and route.reason or "no matching route"))
       self:_inc("policy_unmatched")
       self:_inc("servfail")
       self:_reply(client, self.wire.error_response(query, 2))
@@ -596,7 +613,7 @@ function Relay:_query(client, raw)
     return
   end
   self.serial = self.serial + 1
-  local job = { serial = self.serial, client = client, query = query,
+  local job = { serial = self.serial, client = client, query = query, generation = self.generation,
     route = route, policy_id = route and route.policy_id,
     deadline = self.now + self.cfg.total_timeout, attempts = 0, state = "queued" }
   self.jobs[job.serial] = job
@@ -756,7 +773,12 @@ function Relay:_upstream_frames(ep)
     if job.abandoned then self:_remove_job(job)
     else
       if self.wire.downstream_response then raw = self.wire.downstream_response(raw, job.query, job.selected_server) end
-      if raw then self:_finish(job, raw, true)
+      local changed = false
+      if raw and self.cfg.dns_policy and self.cfg.dns_policy.aaaa_filter and job.query.qtype == 28 then
+        raw, changed = self.wire.filter_aaaa(raw)
+        if changed == true then self:_inc("aaaa_filtered") end
+      end
+      if raw then self:_finish(job, raw, changed ~= true)
       else self:_fail(job, "response_transform") end
     end
   end
@@ -792,7 +814,38 @@ function Relay:_local_read(job)
   self:_finish(job, raw, false)
 end
 
+-- Refresh only runtime state, never the configuration snapshot. Close old sockets
+-- before installing routes; all pending jobs fail rather than leaking to a new
+-- DNS policy or inserting a late response into the new generation's cache.
+function Relay:_refresh_policy()
+  if not self.cfg.policy_refresh or self.now < self.next_policy_refresh then return end
+  self.next_policy_refresh = self.now + 30
+  local ok, changed = pcall(self.cfg.policy_refresh)
+  if not ok then
+    self:_event("policy_refresh", "DNS runtime refresh failed")
+    -- A programming/API failure cannot leave old destinations active forever.
+    for _, route in ipairs(self.cfg.dns_policy.routes) do
+      route.upstreams, route.unavailable = {}, true
+    end
+    changed = true
+  end
+  if not changed then return end
+  local pending = {}
+  for _, job in pairs(self.jobs) do pending[#pending + 1] = job end
+  for _, job in ipairs(pending) do
+    if job.abandoned then self:_remove_job(job) else self:_fail(job, "policy_changed") end
+  end
+  for _, ep in ipairs(self.endpoints) do close(ep.socket); ep.socket = nil end
+  if self.cache then self.cache:clear() end
+  self.generation = self.generation + 1
+  self.resource_probe = nil
+  self:_load_routes()
+  self:_inc("policy_updates")
+  self:_event("policy_updated", "DNS runtime updated generation=" .. self.generation)
+end
+
 function Relay:_timers()
+  self:_refresh_policy()
   local clients = {}
   for _, client in pairs(self.clients) do clients[#clients + 1] = client end
   for _, client in ipairs(clients) do

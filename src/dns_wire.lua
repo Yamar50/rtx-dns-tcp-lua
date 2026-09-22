@@ -353,6 +353,101 @@ function M.validate_response(raw, q, expected_id)
     return r
 end
 
+-- These RDATA formats contain no DNS compression references. Unknown types
+-- remain safe to relay unchanged, but are not safe to relocate speculatively.
+local filter_opaque_types = {
+    [1] = true, [16] = true, [41] = true, [43] = true, [44] = true,
+    [48] = true, [50] = true, [51] = true, [52] = true, [53] = true,
+    [59] = true, [60] = true, [99] = true, [256] = true, [257] = true,
+}
+
+local function filter_rdata(raw, rr)
+    local t, p, finish = rr.rtype, rr.rdata, rr.finish
+    if filter_opaque_types[t] then return sub(raw, p, finish) end
+    local parts = {}
+    local function copy_to(next_p)
+        parts[#parts + 1], p = sub(raw, p, next_p - 1), next_p
+    end
+    local function expand_name()
+        -- parse_message already validated every pointer against known name
+        -- boundaries. Expand from the original message, never from moved data.
+        local name, err, next_p = name_at(raw, p)
+        if not name then return nil, err end
+        if next_p > finish + 1 then return nil, "name exceeds filtered RDATA" end
+        parts[#parts + 1], p = name, next_p
+        return true
+    end
+    local names, tail = 1, false
+    if single_name[t] then
+        -- The whole RDATA is one name.
+    elseif t == 6 then names, tail = 2, true -- SOA: two names and five integers.
+    elseif t == 14 or t == 17 then names = 2 -- MINFO / RP
+    elseif t == 15 or t == 18 or t == 21 or t == 36 or t == 33 then
+        copy_to(p + (t == 33 and 6 or 2))
+    elseif t == 35 then -- NAPTR: order, preference, three strings, replacement.
+        copy_to(p + 4)
+        for _ = 1, 3 do
+            local next_p, err = char_string_end(raw, p, finish)
+            if not next_p then return nil, err end
+            copy_to(next_p)
+        end
+    elseif t == 46 then copy_to(p + 18); tail = true -- RRSIG
+    elseif t == 47 then tail = true -- NSEC
+    elseif t == 64 or t == 65 then copy_to(p + 2); tail = true -- SVCB / HTTPS
+    else return nil, "AAAA filter cannot rewrite this resource record type" end
+    for _ = 1, names do
+        local ok, err = expand_name()
+        if not ok then return nil, err end
+    end
+    if tail then copy_to(finish + 1) end
+    if p ~= finish + 1 then return nil, "extra filtered RDATA" end
+    return concat(parts)
+end
+
+-- Filter external AAAA replies after response validation and route selection.
+-- Returns bytes, changed; failures return nil, error. Callers must not cache a
+-- changed reply: filtering is local policy, not authenticated denial of AAAA.
+function M.filter_aaaa(raw)
+    local m, err = parse_message(raw)
+    if not m then return nil, err end
+    if not m.qr or m.opcode ~= 0 then return nil, "AAAA filter requires a QUERY response" end
+    if m.qtype ~= 28 or m.rcode ~= 0 or (m.extended_rcode or 0) ~= 0 then return raw, false end
+    local removed, changed = {}, false
+    for _, rr in ipairs(m.records) do
+        if rr.rtype == 28 then
+            removed[rr.owner .. pack16(rr.rclass)], changed = true, true
+        end
+    end
+    if not changed then return raw, false end
+    if m.signed then return nil, "AAAA filter cannot rewrite a signed message" end
+
+    local records, counts, length = {}, {answer = 0, authority = 0, additional = 0}, 12 + #m.question
+    for _, rr in ipairs(m.records) do
+        local remove = rr.rtype == 28 or (rr.rtype == 46 and M.u16(raw, rr.rdata) == 28
+            and removed[rr.owner .. pack16(rr.rclass)])
+        if not remove then
+            local data, data_error = filter_rdata(raw, rr)
+            if not data then return nil, data_error end
+            local record_length = #rr.owner + 10 + #data
+            if #data > 65535 or length + record_length > 65535 then
+                return nil, "AAAA filtered response exceeds DNS message limit"
+            end
+            -- TTL bytes (including OPT flags) and opaque RDATA fields retain
+            -- their exact values; every owner and embedded name is relocated.
+            records[#records + 1] = rr.owner .. pack16(rr.rtype) .. pack16(rr.rclass)
+                .. sub(raw, rr.ttl_pos, rr.ttl_pos + 3) .. pack16(#data) .. data
+            counts[rr.section], length = counts[rr.section] + 1, length + record_length
+        end
+    end
+    local flags = byte(raw, 4) - (m.ad and 32 or 0)
+    local filtered = sub(raw, 1, 3) .. char(flags) .. pack16(1)
+        .. pack16(counts.answer) .. pack16(counts.authority) .. pack16(counts.additional)
+        .. m.question .. concat(records)
+    local checked, check_error = parse_message(filtered)
+    if not checked then return nil, check_error end
+    return filtered, true
+end
+
 function M.error_response(query, rcode)
     local raw = type(query) == "table" and query.raw or query
     if type(raw) ~= "string" or #raw < 2 then return nil, "query has no ID" end
