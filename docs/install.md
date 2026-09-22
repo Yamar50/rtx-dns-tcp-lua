@@ -8,7 +8,7 @@ GitHubの[Releases](https://github.com/Yamar50/rtx-dns-tcp-lua/releases)から`r
 
 配布版は起動時にRTXのconfigを読み、TCP/53で待ち受けます。
 
-- 上流DNS：`dns server select`を番号順で評価し、未一致時は`dns server`を使用。
+- 上流DNS：`dns server select`を番号順で評価し、未一致時は固定の`dns server`、`dns server pp`、`dns server dhcp`の優先順で選択。PP未取得を理由に通常のDHCP設定へ切り替えることはありません。
 - アクセス許可：`dns host`の単一IP・IP範囲・対応インターフェースのネットワークを使用。`any`または省略時はRTXの既定値どおり全ホストを許可。`none`なら起動しません。
 - ローカル名：`ip host`・`dns static`に登録された名前を内蔵UDP DNSへ問い合わせる。個別の`local_zones`設定は不要。
 - キャッシュ：256件。実行時間の制限なし。統計は60秒間隔でsyslogへ出力。
@@ -45,6 +45,8 @@ make directory /lua
 ```
 
 ファイルをコピーし、Luaの構文を確認します。
+
+コンソールのコマンドは1行ずつ実行し、各コマンドの終了を確認してから次へ進みます。特に`luac`の実行中に起動コマンドをまとめて送信しないでください。
 
 ```text
 copy usb1:/rtx-dns.lua /lua/rtx-dns.lua
