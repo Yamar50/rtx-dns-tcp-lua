@@ -973,7 +973,9 @@ function Relay:step()
       if slept and result ~= false then
         local before = self.now
         self.now = self:_clock()
-        if self.now > before then return true end
+        -- A fractional clock can advance during a no-op sleep. Require the
+        -- requested delay, not merely a later timestamp, before retrying.
+        if self.now - before >= 1 then return true end
       end
     end
     self.stopped = true; return nil, "select failed"

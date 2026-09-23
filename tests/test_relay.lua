@@ -1675,8 +1675,11 @@ function tests.required_apis_and_initialization_failures_are_bounded()
 end
 
 function tests.failed_or_nonwaiting_sleep_cannot_spin()
-  for _, mode in ipairs({"throw", "false", "no-wait"}) do
+  for _, mode in ipairs({"throw", "false", "no-wait", "no-wait-fractional"}) do
     local env = mock({select_error = true})
+    if mode == "no-wait-fractional" then
+      env.api.gettime = function() env.time = env.time + 0.0001; return env.time end
+    end
     local r = relay(env, {sleep = function()
       if mode == "throw" then error("sleep failed") end
       if mode == "false" then return false end
