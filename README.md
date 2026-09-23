@@ -1,6 +1,15 @@
 ソースコード・テスト・ドキュメントはすべてOpenAI Codexで生成した。
 
-# RTX TCP DNS補完
+# RTXのDNSにTCPフォールバックを追加
+
+**RTXをDNSサーバーとして使ったまま、UDPでは収まらない大きなDNS応答も受け取れるようにするLuaスクリプトです。** クライアント側のDNSサーバー設定を変えずに使えます。
+
+- **TCPフォールバックに対応**：クライアントがUDPからTCPへ切り替えた問い合わせを、同じRTXのIPアドレスで受け付けます。[ヤマハ公式FAQで説明されている内蔵DNSのTCP未対応](https://www.rtpro.yamaha.co.jp/RT/FAQ/TCPIP/dns-recursive-server.html)を補います。
+- **インストールは簡単**：配布ファイルの`rtx-dns.lua`をRTXへ転送し、起動コマンドを実行するだけ。追加ライブラリやビルドは不要です。自動起動もスケジュールコマンドで登録できます。
+- **スクリプトの個別設定は不要**：上流DNS、問い合わせを許可する端末・LAN、簡易DNSの登録内容を、起動時にRTXの設定から自動で読み込みます。Luaファイルを編集する必要はありません。
+- **既存の内蔵DNSと共存**：通常のUDP問い合わせは従来どおり内蔵DNSが処理します。登録済みの簡易DNSレコードも内蔵DNSへ問い合わせ、スクリプトがRTXの設定を書き換えることはありません。
+
+[ダウンロード（GitHub Releases）](https://github.com/Yamar50/rtx-dns-tcp-lua/releases/latest) · [インストール手順](docs/install.md)
 
 ## v0.1.4の主な修正点
 
