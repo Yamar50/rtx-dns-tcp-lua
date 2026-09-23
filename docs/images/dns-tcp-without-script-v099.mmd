@@ -1,0 +1,10 @@
+sequenceDiagram
+    participant Client as PC・スマートフォン
+    participant Native as YAMAHAルーター内蔵DNS
+    participant Upstream as 上流DNS
+    Client->>Native: UDPで問い合わせ
+    Native->>Upstream: UDPで問い合わせ
+    Upstream-->>Native: UDPでは応答が収まらない<br/>TCPで再問い合わせしてください
+    Native-->>Client: UDPでは応答が収まらない<br/>TCPで再問い合わせしてください
+    Client-xNative: 同じYAMAHAルーターへTCPで再問い合わせ
+    Note over Client,Native: TCP未対応のため、<br/>YAMAHAルーターは問い合わせを処理しない<br/>結果：タイムアウトなどのエラー

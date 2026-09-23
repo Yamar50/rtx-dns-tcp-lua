@@ -1,0 +1,16 @@
+sequenceDiagram
+    participant Client as PC・スマートフォン
+    box YAMAHAルーター（同じIPアドレス）
+        participant Native as 内蔵DNS
+        participant Lua as rtx-dns.lua
+    end
+    participant Upstream as 上流DNS
+    Client->>Native: UDPで問い合わせ
+    Native->>Upstream: UDPで問い合わせ
+    Upstream-->>Native: UDPでは応答が収まらない<br/>TCPで再問い合わせしてください
+    Native-->>Client: UDPでは応答が収まらない<br/>TCPで再問い合わせしてください
+    Client->>Lua: 同じYAMAHAルーターへTCPで再問い合わせ
+    Lua->>Upstream: TCPで問い合わせ
+    Upstream-->>Lua: 大きなDNS応答（TCP）
+    Lua-->>Client: 大きなDNS応答（TCP）
+    Note over Client,Lua: 大きなDNS応答を取得できる
