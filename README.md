@@ -11,6 +11,50 @@
 
 [ダウンロード（GitHub Releases）](https://github.com/Yamar50/rtx-dns-tcp-lua/releases/latest) · [インストール手順](docs/install.md)
 
+## このスクリプトがあると…
+
+**大きなDNS応答も、これまでと同じRTXから受け取れます。** 以下は、上流DNSがUDP応答を切り詰めて返す場合の例です。`TC=1`は「応答を切り詰めた」という印で、これを受けたクライアントがTCPで問い合わせ直します。
+
+```mermaid
+sequenceDiagram
+    participant Client as PC・スマートフォン
+    box RTX（同じIPアドレス）
+        participant Native as 内蔵DNS
+        participant Lua as rtx-dns.lua
+    end
+    participant Upstream as 上流DNS
+    Client->>Native: UDPで問い合わせ
+    Native->>Upstream: UDPで問い合わせ
+    Upstream-->>Native: 切り詰めたUDP応答（TC=1）
+    Native-->>Client: 切り詰めたUDP応答（TC=1）
+    Client->>Lua: 同じRTXへTCPで再問い合わせ
+    Lua->>Upstream: TCPで問い合わせ
+    Upstream-->>Lua: 大きなDNS応答（TCP）
+    Lua-->>Client: 大きなDNS応答（TCP）
+    Note over Client,Lua: 大きなDNS応答を取得できる
+```
+
+UDPからTCPへの切り替えはクライアントが行い、そのTCP問い合わせをLuaが受け付けます。上流DNSはRTXの設定から選びます。
+
+## このスクリプトがないと…
+
+**TCPで問い合わせ直しても、RTX内蔵DNSでは大きな応答を受け取れません。** UDPの切り詰め応答までは同じ流れですが、その先のTCP問い合わせを受け付ける機能がありません。
+
+```mermaid
+sequenceDiagram
+    participant Client as PC・スマートフォン
+    participant Native as RTX内蔵DNS
+    participant Upstream as 上流DNS
+    Client->>Native: UDPで問い合わせ
+    Native->>Upstream: UDPで問い合わせ
+    Upstream-->>Native: 切り詰めたUDP応答（TC=1）
+    Native-->>Client: 切り詰めたUDP応答（TC=1）
+    Client-xNative: 同じRTXへTCPで再問い合わせ
+    Note over Client,Native: TCP未対応のため、この応答を取得できない
+```
+
+通常のUDP問い合わせは、スクリプトの有無にかかわらず内蔵DNSが処理します。RTXに登録した簡易DNSのレコードも引き続き利用できます。TCPで問い合わせ直す動作は[RFC 7766](https://www.rfc-editor.org/rfc/rfc7766.html#section-4)に、内蔵DNSのTCP未対応は[ヤマハ公式FAQ](https://www.rtpro.yamaha.co.jp/RT/FAQ/TCPIP/dns-recursive-server.html)に説明があります。
+
 ## v0.1.4の主な修正点
 
 - 約4,000件のAレコードを含む約64KBの応答で、単発の問い合わせでも応答送信前に接続が閉じる問題を修正しました。
