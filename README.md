@@ -218,6 +218,7 @@ PP・DHCPの状態は起動時と30秒ごとに確認します。接続先や選
 
 ## 参照資料
 
+- [IPv6のみの上流DNSが選ばれた場合のIPv4 DNSへの切替方針（確定した次期仕様・未実装）](docs/dns-ipv6-fallback.md)
 - [Yamaha Lua機能](https://www.rtpro.yamaha.co.jp/RT/docs/lua/)
 - [dns service](https://www.rtpro.yamaha.co.jp/RT/manual/rt-common/dns/dns_service.html)
 - [dns server select](https://www.rtpro.yamaha.co.jp/RT/manual/rt-common/dns/dns_server_select.html)

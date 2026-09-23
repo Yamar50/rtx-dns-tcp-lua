@@ -2,6 +2,8 @@
 
 # DNS設定の選択と定期更新
 
+このページは現行配布版v0.1.4の動作を説明します。次期仕様として確定した[IPv6のみの上流DNSが選ばれた場合のIPv4 DNSへの切替方針](dns-ipv6-fallback.md)は、まだ未実装です。
+
 | 設定・状態 | 動作 |
 |---|---|
 | `dns service recursive` / `off` | recursiveで開始、offなら起動を中止。省略時はrecursive |
