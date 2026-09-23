@@ -11,6 +11,50 @@
 
 [v0.9.9のダウンロード](https://github.com/Yamar50/rtx-dns-tcp-lua/releases/tag/v0.9.9) · [インストール手順](docs/install.md) · [動作が見込まれる機種・最低ファームウェア・動作確認](docs/compatibility.md)
 
+## このスクリプトがあると…
+
+**大きなDNS応答も、これまでと同じYAMAHAルーターから受け取れます。** 以下は、上流DNSの応答がUDPで送れるサイズを超える場合の例です。上流DNSは「UDPでは応答が収まらないので、TCPで再問い合わせしてください」という意味の通知（`TC=1`）を返します。これを受けたクライアントがTCPで問い合わせ直します。
+
+```mermaid
+sequenceDiagram
+    participant Client as PC・スマートフォン
+    box YAMAHAルーター（同じIPアドレス）
+        participant Native as 内蔵DNS
+        participant Lua as rtx-dns.lua
+    end
+    participant Upstream as 上流DNS
+    Client->>Native: UDPで問い合わせ
+    Native->>Upstream: UDPで問い合わせ
+    Upstream-->>Native: UDPでは応答が収まらない<br/>TCPで再問い合わせしてください
+    Native-->>Client: UDPでは応答が収まらない<br/>TCPで再問い合わせしてください
+    Client->>Lua: 同じYAMAHAルーターへTCPで再問い合わせ
+    Lua->>Upstream: TCPで問い合わせ
+    Upstream-->>Lua: 大きなDNS応答（TCP）
+    Lua-->>Client: 大きなDNS応答（TCP）
+    Note over Client,Lua: 大きなDNS応答を取得できる
+```
+
+UDPからTCPへの切り替えはクライアントが行い、そのTCP問い合わせをLuaが受け付けます。
+
+## このスクリプトがないと…
+
+**TCPで問い合わせ直しても、YAMAHAルーター内蔵DNSでは大きな応答を受け取れません。** TCPで問い合わせ直すよう通知を受け取るところまでは同じ流れですが、その先のTCP問い合わせを受け付ける機能がありません。
+
+```mermaid
+sequenceDiagram
+    participant Client as PC・スマートフォン
+    participant Native as YAMAHAルーター内蔵DNS
+    participant Upstream as 上流DNS
+    Client->>Native: UDPで問い合わせ
+    Native->>Upstream: UDPで問い合わせ
+    Upstream-->>Native: UDPでは応答が収まらない<br/>TCPで再問い合わせしてください
+    Native-->>Client: UDPでは応答が収まらない<br/>TCPで再問い合わせしてください
+    Client-xNative: 同じYAMAHAルーターへTCPで再問い合わせ
+    Note over Client,Native: TCP未対応のため、<br/>YAMAHAルーターは問い合わせを処理しない<br/>結果：タイムアウトなどのエラー
+```
+
+通常のUDP問い合わせは、スクリプトの有無にかかわらず内蔵DNSが処理します。YAMAHAルーターに登録した簡易DNSのレコードも引き続き利用できます。TCPで問い合わせ直す動作は[RFC 7766](https://www.rfc-editor.org/rfc/rfc7766.html#section-4)に、内蔵DNSのTCP未対応は[ヤマハ公式FAQ](https://www.rtpro.yamaha.co.jp/RT/FAQ/TCPIP/dns-recursive-server.html)に説明があります。
+
 ## 動作が見込まれる機種と動作確認状況
 
 **RTX・NVR・vRXシリーズに加え、FWX120も対象です。** [ヤマハ公式Lua機能対応表](https://www.rtpro.yamaha.co.jp/RT/docs/lua/index.html)とリリースノートを基に、必要なAPIを備える17機種・提供環境をまとめました。最低ファームウェアはAPIの条件で、実機確認した版とは別に記載しています。
@@ -60,9 +104,9 @@
 
 - **YAMAHA NVRのONUやタグVLANなどの設定に対応**：インターフェース名の判定を共通化し、未対応のDNS取得元があっても、選択条件を解釈できる場合は無関係な規則の問い合わせを継続します。
 - **IPv6とIPv4でDNSの経路が異なる環境に対応**：一致した規則のDNSがIPv6のみの場合は、条件に合う後続のselect規則、次に通常DNSのIPv4を使います。DNS取得状態が不明な規則や明示拒否は迂回しません。 [DNS選択の詳細](https://github.com/Yamar50/rtx-dns-tcp-lua/blob/main/docs/dns-ipv6-fallback.md)
-- **機種ごとのAPI差と異常時の処理を整理**：必要なAPIを確認し、初期化失敗時のソケット解放、ログ失敗の隔離、待機できない場合の停止を追加しました。
+- **機種ごとのAPI差に配慮**：通信に不要な事前判定を減らし、ログ機能が使えない場合や一時的な待機処理の失敗でも、可能な限り名前解決を継続します。
 
-v0.9.9はRTX830・RTX1210で、各32項目の機能回帰と各7スイート・2,738チェックの整数版Luaによる解析試験に成功しました。さらにRTX830の5台とRTX1210の1台へ配備し、実際の設定と5つの仮想IPを含む計75件の確認に成功しています。[検証結果](docs/validation.md#v099-validation)
+v0.9.9はRTX830・RTX1210で機能・負荷試験を実施しました。API判定の追加修正後も、各機で8スイート・3,167チェックと代替待機の19チェック、実ソケットの起動・解放、8件の名前解決に成功しています。初期候補を使った6台への配備確認など、試験した版と条件は検証記録に分けて記載しています。[検証結果](docs/validation.md#v099-validation)
 
 v0.9.9はv1.0.0に向けた確認用の版です。複数機種での通常利用の結果を確認し、必要に応じて軽微な不具合を修正してからv1.0.0へ進みます。[変更内容と検証結果](docs/releases/v0.9.9.md)・[DNS選択の技術仕様](docs/dns-ipv6-fallback.md)
 
@@ -84,50 +128,6 @@ save
 ```
 
 手動起動の代わりに、スケジュールを保存してYAMAHAルーターを再起動しても開始できます。USBメモリからの転送、構文確認、更新・停止までの手順は[インストールと起動](docs/install.md)を参照してください。
-
-## このスクリプトがあると…
-
-**大きなDNS応答も、これまでと同じYAMAHAルーターから受け取れます。** 以下は、上流DNSの応答がUDPで送れるサイズを超える場合の例です。上流DNSは「UDPでは応答が収まらないので、TCPで再問い合わせしてください」という意味の通知（`TC=1`）を返します。これを受けたクライアントがTCPで問い合わせ直します。
-
-```mermaid
-sequenceDiagram
-    participant Client as PC・スマートフォン
-    box YAMAHAルーター（同じIPアドレス）
-        participant Native as 内蔵DNS
-        participant Lua as rtx-dns.lua
-    end
-    participant Upstream as 上流DNS
-    Client->>Native: UDPで問い合わせ
-    Native->>Upstream: UDPで問い合わせ
-    Upstream-->>Native: UDPでは応答が収まらない<br/>TCPで再問い合わせしてください
-    Native-->>Client: UDPでは応答が収まらない<br/>TCPで再問い合わせしてください
-    Client->>Lua: 同じYAMAHAルーターへTCPで再問い合わせ
-    Lua->>Upstream: TCPで問い合わせ
-    Upstream-->>Lua: 大きなDNS応答（TCP）
-    Lua-->>Client: 大きなDNS応答（TCP）
-    Note over Client,Lua: 大きなDNS応答を取得できる
-```
-
-UDPからTCPへの切り替えはクライアントが行い、そのTCP問い合わせをLuaが受け付けます。
-
-## このスクリプトがないと…
-
-**TCPで問い合わせ直しても、YAMAHAルーター内蔵DNSでは大きな応答を受け取れません。** TCPで問い合わせ直すよう通知を受け取るところまでは同じ流れですが、その先のTCP問い合わせを受け付ける機能がありません。
-
-```mermaid
-sequenceDiagram
-    participant Client as PC・スマートフォン
-    participant Native as YAMAHAルーター内蔵DNS
-    participant Upstream as 上流DNS
-    Client->>Native: UDPで問い合わせ
-    Native->>Upstream: UDPで問い合わせ
-    Upstream-->>Native: UDPでは応答が収まらない<br/>TCPで再問い合わせしてください
-    Native-->>Client: UDPでは応答が収まらない<br/>TCPで再問い合わせしてください
-    Client-xNative: 同じYAMAHAルーターへTCPで再問い合わせ
-    Note over Client,Native: TCP未対応のため、<br/>YAMAHAルーターは問い合わせを処理しない<br/>結果：タイムアウトなどのエラー
-```
-
-通常のUDP問い合わせは、スクリプトの有無にかかわらず内蔵DNSが処理します。YAMAHAルーターに登録した簡易DNSのレコードも引き続き利用できます。TCPで問い合わせ直す動作は[RFC 7766](https://www.rfc-editor.org/rfc/rfc7766.html#section-4)に、内蔵DNSのTCP未対応は[ヤマハ公式FAQ](https://www.rtpro.yamaha.co.jp/RT/FAQ/TCPIP/dns-recursive-server.html)に説明があります。
 
 ## 秒間クエリ数の目安と検証機種
 

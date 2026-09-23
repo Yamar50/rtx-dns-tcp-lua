@@ -104,7 +104,9 @@ IPv6アドレスの`%lanN`などのスコープ文字列は解析のために識
 
 現在のスクリプトは、YAMAHA組み込みのLuaと`rt.socket`を使います。外部のLuaSocketや追加ライブラリのインストールは不要です。
 
-必要なAPIには、TCP/UDPソケット、`select`、`gettime`、`rt.command`、`rt.sleep`、`rt.syslog`が含まれます。LuaSocketはLua機能版1.06、`rt.command`のログ抑制引数は1.07で追加されています。表の最低版は両方を満たす版です。vRXの一部旧版は例外があるため、Lua機能版の数字だけでLuaSocketの存在を判断しません。[ヤマハ公式API仕様](https://www.rtpro.yamaha.co.jp/RT/docs/lua/rt_api.html)
+必要なAPIには、TCPソケット、`select`、`gettime`、`rt.command`が含まれます。内蔵DNSへ問い合わせる場合はUDPソケットも必要です。`rt.sleep`・`rt.socket.sleep`・`rt.syslog`は補助機能として扱い、不在だけを理由に起動を中止しません。LuaSocketはLua機能版1.06、`rt.command`のログ抑制引数は1.07で追加されています。表の最低版は両方を満たす版です。vRXの一部旧版は例外があるため、Lua機能版の数字だけでLuaSocketの存在を判断しません。[ヤマハ公式API仕様](https://www.rtpro.yamaha.co.jp/RT/docs/lua/rt_api.html)
+
+ソケットのメソッドは、生成直後に一括検査せず、実際に使う状態で呼び出して確認します。通常の待機は`select`で行い、失敗した場合は`rt.sleep`、`rt.socket.sleep`、空のソケット集合での`select`を利用可能な順に試します。最大3巡の試行で累計1秒以上の待機を確認できれば処理を継続します。待機できない状態ではCPUの空回りを避けるためLuaタスクを停止します。通信に必要なソケットの初期化や時刻取得の失敗、アクセス許可・DNS選択の安全性を確認できない設定については、従来の保護を維持します。
 
 ルーターの機種名を列挙して起動を許可する方式ではありません。表にない機種も、必要なAPIと設定の条件が確認できれば追記します。スイッチ製品は対象外です。通信はIPv4経由で、AAAAレコードの問い合わせとIPv6による通信は区別します。
 

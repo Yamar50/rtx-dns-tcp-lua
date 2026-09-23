@@ -1651,14 +1651,21 @@ function tests.required_apis_and_initialization_failures_are_bounded()
     eq(ok, false); assert(tostring(err):find("socket." .. name, 1, true))
     eq(env.tcp_created, 0, "API absence fails before creating listener")
   end
-  for _, mode in ipairs({"throw", "bad-time", "bind", "listen", "missing-method"}) do
+  for _, mode in ipairs({"throw", "bad-time", "bind", "listen", "missing-timeout", "lookup-bind"}) do
     local env = mock()
     local original = env.api.tcp
     env.api.tcp = function()
       if mode == "throw" then error("private-factory-details") end
       local socket = original()
       if mode == "bind" or mode == "listen" then socket[mode] = function() error("operation failed") end end
-      if mode == "missing-method" then socket.receive = false end
+      if mode == "missing-timeout" then socket.settimeout = false end
+      if mode == "lookup-bind" then
+        local methods = getmetatable(socket).__index
+        setmetatable(socket, {__index = function(_, name)
+          if name == "bind" then error("bind lookup failed") end
+          return methods[name]
+        end})
+      end
       return socket
     end
     if mode == "bad-time" then env.api.gettime = function() return "not-a-clock" end end
@@ -1672,6 +1679,150 @@ function tests.required_apis_and_initialization_failures_are_bounded()
     env.api, function() error("broken logger") end, wire)
   r:close()
   eq(env.sockets[1].closed, true, "broken startup logger cannot leak listener")
+end
+
+function tests.state_specific_socket_methods_allow_complete_dns_exchange()
+  local env = mock()
+  local function restrict_methods(socket)
+    local methods = getmetatable(socket).__index
+    setmetatable(socket, {__index = function(s, name)
+      local allowed = name == "settimeout" or name == "close"
+      if s.kind == "new" then
+        allowed = allowed or name == "bind" or name == "connect"
+          or (rawget(s, "bound") and name == "listen")
+      elseif s.kind == "listener" then allowed = allowed or name == "accept"
+      elseif s.kind == "client" or s.kind == "upstream" then
+        allowed = allowed or name == "send" or name == "receive" or name == "getpeername"
+      end
+      if not allowed then return nil end
+      if name == "bind" then return function(object, ...)
+        local result, err = methods.bind(object, ...)
+        if result then object.bound = true end
+        return result, err
+      end end
+      return methods[name]
+    end})
+    return socket
+  end
+  local original_tcp, original_client = env.api.tcp, env.client
+  env.api.tcp = function() return restrict_methods(original_tcp()) end
+  env.client = function(...) return restrict_methods(original_client(...)) end
+  local r = relay(env, {local_zones = {}})
+  eq(r.listener.connect, nil, "listening socket need not expose connect")
+  eq(r.listener.send, nil, "listening socket need not expose send")
+  eq(r.listener.receive, nil, "listening socket need not expose receive")
+  local client = env.client(query(2020))
+  until_true(r, function() return #client.output > 0 end)
+  eq(client.output, frame(answer(query(2020))))
+  eq(env.upstream_queries, 1, "client-only methods become usable after connect")
+  r:close()
+  for _, socket in ipairs(env.sockets) do eq(socket.closed, true) end
+end
+
+function tests.socket_method_lookup_errors_are_contained()
+  local env = mock()
+  local r = relay(env)
+  local methods, failed = getmetatable(r.listener).__index, false
+  setmetatable(r.listener, {__index = function(_, name)
+    if name == "accept" and not failed then failed = true; error("temporary method lookup failure") end
+    return methods[name]
+  end})
+  local client = env.client(query(2021))
+  until_true(r, function() return #client.output > 0 end)
+  eq(client.output, frame(answer(query(2021))), "failed lookup does not stop later accepts")
+  eq(r:stats_snapshot().accept_failures, 1)
+  setmetatable(r.listener, {__index = function(_, name)
+    if name == "close" then error("close lookup failed") end
+    return methods[name]
+  end})
+  local ok, err = pcall(function() r:close() end)
+  eq(ok, true, "close lookup failure is contained: " .. tostring(err))
+end
+
+function tests.optional_sleep_is_not_needed_for_normal_select_processing()
+  local env = mock()
+  local r = relay(env)
+  eq(r.cfg.sleep, nil)
+  eq(r.cfg.sleep_fallback, nil)
+  local client = env.client(query(2022))
+  until_true(r, function() return #client.output > 0 end)
+  eq(client.output, frame(answer(query(2022))))
+  r:close()
+end
+
+function tests.select_error_wait_accumulates_across_clock_boundaries()
+  for _, integer_clock in ipairs({false, true}) do
+    local env = mock({select_error = true})
+    if integer_clock then env.api.gettime = function() return math.floor(env.time) end end
+    local sleeps = 0
+    local r = relay(env, {sleep = function(seconds)
+      eq(seconds, 1)
+      sleeps = sleeps + 1
+      env.time = env.time + 0.4
+      return 0
+    end})
+    eq(r:step(), true, "partial elapsed time accumulates before deciding to stop")
+    eq(sleeps, 3)
+    eq(r.stopped, false)
+    r:close()
+  end
+end
+
+function tests.select_error_uses_independent_sleep_fallback()
+  local env = mock({select_error = true})
+  local primary, fallback = 0, 0
+  local r = relay(env, {sleep = function()
+    primary = primary + 1
+    error("primary unavailable")
+  end, sleep_fallback = function(seconds)
+    fallback = fallback + 1
+    env.time = env.time + seconds
+    return 0
+  end})
+  eq(r:step(), true)
+  eq(primary, 1); eq(fallback, 1)
+  eq(r.stopped, false)
+  r:close()
+end
+
+function tests.select_error_can_wait_with_empty_sets_without_sleep_apis()
+  for _, timeout_result in ipairs({false, true}) do
+    local env = mock()
+    local original_select, failed, waits = env.api.select, false, 0
+    env.api.select = function(readers, writers, seconds)
+      if #readers == 0 and #writers == 0 then
+        waits = waits + 1
+        env.time = env.time + seconds
+        if timeout_result then return nil, nil, "timeout" end
+        return {}, {}
+      end
+      if not failed then failed = true; return nil, nil, "temporary select failure" end
+      return original_select(readers, writers, seconds)
+    end
+    local r = relay(env)
+    eq(r:step(), true, "empty select supplies a bounded wait")
+    eq(waits, 1)
+    local client = env.client(query(2023))
+    until_true(r, function() return #client.output > 0 end)
+    eq(client.output, frame(answer(query(2023))), "normal work resumes after transient select failure")
+    r:close()
+  end
+end
+
+function tests.select_error_all_noop_waits_stop_after_bounded_attempts()
+  local env = mock()
+  local calls = {primary = 0, fallback = 0, empty_select = 0}
+  env.api.select = function(readers, writers)
+    if #readers > 0 or #writers > 0 then return nil, nil, "select failed" end
+    calls.empty_select = calls.empty_select + 1
+    return {}, {}
+  end
+  local r = relay(env, {sleep = function() calls.primary = calls.primary + 1 end,
+    sleep_fallback = function() calls.fallback = calls.fallback + 1 end})
+  local ok, err = r:step()
+  eq(ok, nil); eq(err, "select failed"); eq(r.stopped, true)
+  eq(calls.primary, 3); eq(calls.fallback, 3); eq(calls.empty_select, 3)
+  r:close()
 end
 
 function tests.failed_or_nonwaiting_sleep_cannot_spin()

@@ -17,14 +17,20 @@ local defaults = {
   local_zones = {}, local_names = {}, allowed_clients = {}, upstreams = {}
 }
 
+local function invoke(object, method, ...)
+  return object[method](object, ...)
+end
+
 local function call(object, method, ...)
-  local ok, a, b, c = pcall(object[method], object, ...)
+  -- Some runtimes expose methods according to socket state. Protect lookup
+  -- as well as invocation, and test each operation when it is actually used.
+  local ok, a, b, c = pcall(invoke, object, method, ...)
   if not ok then return nil, a end
   return a, b, c
 end
 
 local function close(socket)
-  if socket then pcall(socket.close, socket) end
+  if socket then call(socket, "close") end
 end
 
 local function waiting(err)
@@ -195,13 +201,6 @@ function Relay.new(config, socket_api, logfn, wire, cache)
   local created, listener, err = pcall(socket_api.tcp)
   if not created then error("listener socket creation failed") end
   assert(listener, "listener socket: " .. tostring(err))
-  for _, method in ipairs({ "settimeout", "bind", "listen", "accept", "connect",
-    "getpeername", "send", "receive", "close" }) do
-    local checked, present = pcall(function() return type(listener[method]) == "function" end)
-    if not checked or not present then
-      close(listener); error("TCP socket " .. method .. " API is required")
-    end
-  end
   local ok
   ok, err = call(listener, "settimeout", 0)
   if not ok then close(listener); error("listener timeout: " .. tostring(err)) end
@@ -933,6 +932,34 @@ function Relay:_timers()
   end
 end
 
+function Relay:_wait_after_select_error()
+  local started = self.now
+  -- A temporary select failure need not stop DNS service. Try the available
+  -- wait APIs, allowing several clock observations for early wakes or coarse
+  -- clocks. Bound every attempt so broken/no-op waits cannot spin the CPU.
+  for _ = 1, 3 do
+    for choice = 1, 3 do
+      local waited = false
+      if choice < 3 then
+        local sleep
+        if choice == 1 then sleep = self.cfg.sleep else sleep = self.cfg.sleep_fallback end
+        if type(sleep) == "function" then
+          local ok, result = pcall(sleep, 1)
+          waited = ok and result ~= false
+          self.now = self:_clock()
+        end
+      else
+        local ok, readable, writable, err = pcall(self.api.select, {}, {}, 1)
+        waited = ok and ((type(readable) == "table" and type(writable) == "table")
+          or (not readable and err == "timeout"))
+        self.now = self:_clock()
+      end
+      if waited and self.now - started >= 1 then return true end
+    end
+  end
+  return false
+end
+
 function Relay:step()
   if self.stopped then return false end
   self.now = self:_clock()
@@ -968,16 +995,7 @@ function Relay:step()
     self:_inc("select_errors")
     self:_event("select", "select failed: " .. tostring(ok and err or readable))
     -- A persistent select error must not turn the run loop into a CPU spin.
-    if self.cfg.sleep then
-      local slept, result = pcall(self.cfg.sleep, 1)
-      if slept and result ~= false then
-        local before = self.now
-        self.now = self:_clock()
-        -- A fractional clock can advance during a no-op sleep. Require the
-        -- requested delay, not merely a later timestamp, before retrying.
-        if self.now - before >= 1 then return true end
-      end
-    end
+    if self:_wait_after_select_error() then return true end
     self.stopped = true; return nil, "select failed"
   end
   -- select may have waited across a deadline while making a socket readable.

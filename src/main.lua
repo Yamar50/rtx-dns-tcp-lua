@@ -102,14 +102,6 @@ function M.start(config, runtime)
     log("DNSRELAY startup failed " .. policy_error)
     error(policy_error)
   end
-  if type(runtime.sleep) ~= "function" then
-    log("DNSRELAY startup failed runtime.sleep API is required")
-    error("runtime.sleep API is required")
-  end
-  if config.syslog ~= false and type(runtime.syslog) ~= "function" then
-    log("DNSRELAY startup failed runtime.syslog API is required")
-    error("runtime.syslog API is required")
-  end
   -- Copy the supplied profile; retain only parsed settings from show config.
   local profile = {}
   for key, value in pairs(config) do profile[key] = value end
@@ -129,7 +121,16 @@ function M.start(config, runtime)
       end
     end
   end
-  config.sleep = function(seconds) return runtime.sleep(seconds) end
+  -- Normal operation waits in select. Optional sleep APIs are alternatives
+  -- only when select fails; missing logging or sleep must not prevent startup.
+  config.sleep = nil
+  config.sleep_fallback = nil
+  if type(runtime.sleep) == "function" then
+    config.sleep = function(seconds) return runtime.sleep(seconds) end
+  end
+  if type(runtime.socket.sleep) == "function" and runtime.socket.sleep ~= runtime.sleep then
+    config.sleep_fallback = function(seconds) return runtime.socket.sleep(seconds) end
+  end
   local cache = Cache.new(config.cache_entries or 256, config.cache_bytes or 1048576,
     config.cache_ttl_fields or 4096)
   local initialized, relay = pcall(Relay.new, config, runtime.socket, log, wire, cache)

@@ -252,11 +252,58 @@ local guarded, guarded_error = pcall(main.start, {dns_config = 'static'}, {
 print, Relay.new = saved_print, saved_new
 check(not guarded and tostring(guarded_error):find('original-runtime-failure',1,true), 'original failure survives broken log APIs')
 check(closed == 1, 'runtime failure releases relay')
-for _, missing in ipairs({'sleep','syslog'}) do
-  local r = {socket = {}, sleep = function() end, syslog = function() end}
-  r[missing] = nil
+for _, mode in ipairs({'missing-both', 'missing-syslog', 'throwing-syslog'}) do
+  local ran, released = 0, 0
+  Relay.new = function(config, _, log)
+    if mode == 'missing-both' then
+      check(config.sleep == nil and config.sleep_fallback == nil, 'missing sleep APIs remain optional')
+    end
+    log('initialization succeeds without a working logger')
+    return {run = function()
+      ran = ran + 1
+      log('normal DNS processing continues')
+      return {responses = 1}
+    end, close = function() released = released + 1 end}
+  end
+  local r = {socket = {}}
+  if mode ~= 'missing-both' then r.sleep = function() return 0 end end
+  if mode == 'throwing-syslog' then r.syslog = function() error('syslog-failure') end end
+  local ok, result = pcall(main.start, {dns_config = 'static', console_log = false}, r)
+  check(ok and result.responses == 1, mode .. ' does not reject startup or stop processing')
+  check(ran == 1 and released == 1, mode .. ' runs and releases the relay')
+end
+
+for _, mode in ipairs({'primary-only', 'fallback-only', 'distinct', 'same-function'}) do
+  local primary_calls, fallback_calls = 0, 0
+  local function primary(seconds)
+    check(seconds == 1, 'primary sleep receives requested seconds')
+    primary_calls = primary_calls + 1
+    return 0
+  end
+  local function fallback(seconds)
+    check(seconds == 1, 'fallback sleep receives requested seconds')
+    fallback_calls = fallback_calls + 1
+    return false
+  end
+  local r = {socket = {}}
+  if mode ~= 'fallback-only' then r.sleep = primary end
+  if mode == 'fallback-only' or mode == 'distinct' then r.socket.sleep = fallback end
+  if mode == 'same-function' then r.socket.sleep = primary end
+  Relay.new = function(config)
+    if r.sleep then
+      check(type(config.sleep) == 'function' and config.sleep(1) == 0, 'primary sleep preserves zero return')
+    else check(config.sleep == nil, 'missing primary sleep is not wrapped') end
+    if mode == 'fallback-only' or mode == 'distinct' then
+      check(type(config.sleep_fallback) == 'function' and config.sleep_fallback(1) == false,
+        'socket sleep fallback preserves false return')
+    else check(config.sleep_fallback == nil, 'absent or duplicate fallback is not installed') end
+    return {run = function() return {} end, close = function() end}
+  end
   local ok, reason = pcall(main.start, {dns_config = 'static', console_log = false}, r)
-  check(not ok and tostring(reason):find('runtime.' .. missing .. ' API is required',1,true), 'missing API: ' .. missing)
+  check(ok, mode .. ' starts: ' .. tostring(reason))
+  check(primary_calls == (r.sleep and 1 or 0), mode .. ' primary called once at most')
+  check(fallback_calls == ((mode == 'fallback-only' or mode == 'distinct') and 1 or 0),
+    mode .. ' independent fallback called once at most')
 end
 Relay.new = function() error('original-constructor-failure') end
 local ok_constructor, error_constructor = pcall(main.start, {dns_config = 'static', console_log = false}, {
