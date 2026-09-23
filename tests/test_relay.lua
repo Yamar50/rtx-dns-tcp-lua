@@ -583,6 +583,89 @@ function tests.halfclose_backpressure_keeps_hard_output_deadline()
   r:close()
 end
 
+function tests.response_write_deadline_starts_after_all_preparation()
+  for _, integer_clock in ipairs({ false, true }) do
+    local env = mock(); env.select_advance = 0
+    if integer_clock then env.api.gettime = function() return math.floor(env.time) end end
+    local delayed_wire = {}
+    for key, value in pairs(wire) do delayed_wire[key] = value end
+    -- Cover both a >2-second preparation and a shorter preparation that crosses
+    -- the stale deadline on an integer clock. Include framing in preparation.
+    local delays = integer_clock and { 0.5, 0.25, 0.25, 0.5 } or { 0.5, 0.5, 0.5, 1 }
+    delayed_wire.validate_response = function(...)
+      env.time = env.time + delays[1]
+      return wire.validate_response(...)
+    end
+    delayed_wire.downstream_response = function(...)
+      env.time = env.time + delays[2]
+      return wire.downstream_response(...)
+    end
+    delayed_wire.frame = function(raw)
+      if string.sub(raw, 3, 3) == "R" then env.time = env.time + delays[4] end
+      return frame(raw)
+    end
+    local cache = { get = function() end }
+    function cache:put(_, _, _, saved_at)
+      self.saved_at = saved_at
+      env.time = env.time + delays[3]
+    end
+    local r = relay(env, nil, cache, delayed_wire)
+    eq(r.cfg.client_write_timeout, 2, "default write timeout remains two seconds")
+    env.time = 0.75
+    local q = query(2650)
+    local c = env.client(q)
+    until_true(r, function() return env.upstream_queries == 1 end)
+    local job
+    for _, value in pairs(r.jobs) do job = value end
+    local query_deadline, response_deadline = job.deadline, job.response_deadline
+    local received_at = integer_clock and 0 or 0.75
+    until_true(r, function() return r.clients[c] and #r.clients[c].output == 1 end)
+    local prepared_at = integer_clock and math.floor(env.time) or env.time
+    local client = r.clients[c]
+    eq(client.output[1].deadline, prepared_at + 2, "write budget starts after framing")
+    eq(client.last_activity, prepared_at, "prepared response refreshes client activity")
+    eq(cache.saved_at, received_at, "preparation does not extend cached TTL lifetime")
+    eq(job.deadline, query_deadline, "query deadline is not restarted")
+    eq(job.response_deadline, response_deadline, "upstream response deadline is not restarted")
+    until_true(r, function() return #c.output > 0 end)
+    eq(c.output, frame(answer(q)), "prepared response reaches the client")
+    eq(c.closed, nil)
+    eq(r:stats_snapshot().client_timeouts, nil)
+    r:close()
+  end
+end
+
+function tests.prepared_response_keeps_fixed_write_deadline()
+  for _, partial_and_followup in ipairs({ false, true }) do
+    local env = mock({ send_chunk = 1 }); env.select_advance = 0
+    local cache = { get = function() end, put = function() env.time = env.time + 2.5 end }
+    local r = relay(env, nil, cache)
+    local c = env.client(query(2660)); c.write_blocked = true
+    until_true(r, function() return r.clients[c] and #r.clients[c].output == 1 end)
+    local client, first = r.clients[c], r.clients[c].output[1]
+    eq(first.deadline, 4.5, "slow preparation still leaves a two-second write budget")
+    if partial_and_followup then
+      env.time, c.write_blocked = 3.5, false
+      steps(r, 1)
+      eq(first.pos, 2, "one byte is sent before backpressure")
+      r:_reply(client, answer(query(2661)))
+      eq(#client.output, 2)
+      eq(client.output[2].deadline, 5.5, "later response gets its own write budget")
+      eq(first.deadline, 4.5, "partial send and later reply do not renew the first deadline")
+      c.write_blocked = true
+    end
+    env.time = 4.499
+    steps(r, 1)
+    eq(c.closed, nil, "blocked client stays open until the preparation-based deadline")
+    env.time = 4.5
+    steps(r, 1)
+    eq(c.closed, true, "blocked client closes at the original output deadline")
+    eq(#c.output, partial_and_followup and 1 or 0, "no output bypasses backpressure")
+    eq(r:stats_snapshot().client_timeouts, 1)
+    r:close()
+  end
+end
+
 function tests.halfclose_rate_cutoff_ignores_remaining_buffered_queries()
   local env = mock({ send_chunk = 3 }); env.select_advance = 0
   local cache = { get = function(_, q) return answer(q.raw) end }

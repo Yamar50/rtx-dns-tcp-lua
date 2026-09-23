@@ -347,9 +347,13 @@ end
 function Relay:_reply(client, raw)
   if not self.clients[client.socket] then return end
   if #client.output >= self.cfg.client_pipeline then self:_close_client(client); return end
+  local data = self.wire.frame(raw)
+  -- Validation, transformation and cache work may outlast the loop timestamp.
+  -- Start this reply's fixed write deadline only after its frame is ready.
+  local now = self:_clock()
   client.output[#client.output + 1] = {
-    data = self.wire.frame(raw), pos = 1, deadline = self.now + self.cfg.client_write_timeout }
-  client.last_activity = self.now
+    data = data, pos = 1, deadline = now + self.cfg.client_write_timeout }
+  client.last_activity = now
 end
 
 function Relay:_finish(job, raw, cache_response)
