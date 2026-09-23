@@ -13,7 +13,7 @@
 
 ## このスクリプトがあると…
 
-**大きなDNS応答も、これまでと同じYAMAHA RTXから受け取れます。** 以下は、上流DNSがUDP応答を切り詰めて返す場合の例です。`TC=1`は「応答を切り詰めた」という印で、これを受けたクライアントがTCPで問い合わせ直します。
+**大きなDNS応答も、これまでと同じYAMAHA RTXから受け取れます。** 以下は、上流DNSの応答がUDPで送れるサイズを超える場合の例です。上流DNSは「UDPでは応答が収まらないので、TCPで再問い合わせしてください」という意味の通知（`TC=1`）を返します。これを受けたクライアントがTCPで問い合わせ直します。
 
 ```mermaid
 sequenceDiagram
@@ -25,8 +25,8 @@ sequenceDiagram
     participant Upstream as 上流DNS
     Client->>Native: UDPで問い合わせ
     Native->>Upstream: UDPで問い合わせ
-    Upstream-->>Native: 切り詰めたUDP応答（TC=1）
-    Native-->>Client: 切り詰めたUDP応答（TC=1）
+    Upstream-->>Native: UDPでは応答が収まらない<br/>TCPで再問い合わせしてください
+    Native-->>Client: UDPでは応答が収まらない<br/>TCPで再問い合わせしてください
     Client->>Lua: 同じYAMAHA RTXへTCPで再問い合わせ
     Lua->>Upstream: TCPで問い合わせ
     Upstream-->>Lua: 大きなDNS応答（TCP）
@@ -38,7 +38,7 @@ UDPからTCPへの切り替えはクライアントが行い、そのTCP問い�
 
 ## このスクリプトがないと…
 
-**TCPで問い合わせ直しても、YAMAHA RTX内蔵DNSでは大きな応答を受け取れません。** UDPの切り詰め応答までは同じ流れですが、その先のTCP問い合わせを受け付ける機能がありません。
+**TCPで問い合わせ直しても、YAMAHA RTX内蔵DNSでは大きな応答を受け取れません。** TCPで問い合わせ直すよう通知を受け取るところまでは同じ流れですが、その先のTCP問い合わせを受け付ける機能がありません。
 
 ```mermaid
 sequenceDiagram
@@ -47,8 +47,8 @@ sequenceDiagram
     participant Upstream as 上流DNS
     Client->>Native: UDPで問い合わせ
     Native->>Upstream: UDPで問い合わせ
-    Upstream-->>Native: 切り詰めたUDP応答（TC=1）
-    Native-->>Client: 切り詰めたUDP応答（TC=1）
+    Upstream-->>Native: UDPでは応答が収まらない<br/>TCPで再問い合わせしてください
+    Native-->>Client: UDPでは応答が収まらない<br/>TCPで再問い合わせしてください
     Client-xNative: 同じYAMAHA RTXへTCPで再問い合わせ
     Note over Client,Native: TCP未対応のため、この応答を取得できない
 ```
