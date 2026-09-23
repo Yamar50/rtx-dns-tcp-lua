@@ -305,6 +305,14 @@ function M.with_id(raw, id)
     return pack16(id) .. sub(raw, 3)
 end
 
+-- The embedded UDP API receives at most 2048 bytes. EDNS is hop-specific:
+-- reduce an existing advertisement without adding OPT or changing its flags.
+function M.local_query(q, maximum)
+    if not q.opt or q.edns_udp_size <= maximum then return q.raw end
+    local position = q.opt.ttl_pos - 2
+    return sub(q.raw, 1, position - 1) .. pack16(maximum) .. sub(q.raw, position + 2)
+end
+
 -- EDNS is hop-specific. Explicit policy mode reproduces the selected
 -- server's edns setting; nil preserves the original static relay behavior.
 function M.upstream_query(q, server)

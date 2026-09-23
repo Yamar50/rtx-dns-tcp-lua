@@ -85,14 +85,14 @@ function M.start(config, runtime)
   local Cache = require("cache")
   local Relay = require("relay")
   local function log(message)
-    if config.console_log ~= false then print(message) end
-    if config.syslog ~= false then
+    if config.console_log ~= false then pcall(print, message) end
+    if config.syslog ~= false and type(runtime.syslog) == "function" then
       -- Yamaha limits each SYSLOG message to 231 bytes. Preserve the whole
       -- message across records, including when counters or errors grow long.
       local first, prefix = 1, ""
       repeat
         local last = first + 231 - #prefix - 1
-        runtime.syslog("info", prefix .. string.sub(message, first, last))
+        pcall(runtime.syslog, "info", prefix .. string.sub(message, first, last))
         first, prefix = last + 1, "DNSRELAY continued "
       until first > #message
     end
@@ -101,6 +101,14 @@ function M.start(config, runtime)
   if policy_error then
     log("DNSRELAY startup failed " .. policy_error)
     error(policy_error)
+  end
+  if type(runtime.sleep) ~= "function" then
+    log("DNSRELAY startup failed runtime.sleep API is required")
+    error("runtime.sleep API is required")
+  end
+  if config.syslog ~= false and type(runtime.syslog) ~= "function" then
+    log("DNSRELAY startup failed runtime.syslog API is required")
+    error("runtime.syslog API is required")
   end
   -- Copy the supplied profile; retain only parsed settings from show config.
   local profile = {}
@@ -121,10 +129,14 @@ function M.start(config, runtime)
       end
     end
   end
-  config.sleep = function(seconds) runtime.sleep(seconds) end
+  config.sleep = function(seconds) return runtime.sleep(seconds) end
   local cache = Cache.new(config.cache_entries or 256, config.cache_bytes or 1048576,
     config.cache_ttl_fields or 4096)
-  local relay = Relay.new(config, runtime.socket, log, wire, cache)
+  local initialized, relay = pcall(Relay.new, config, runtime.socket, log, wire, cache)
+  if not initialized then
+    log("DNSRELAY startup failed " .. tostring(relay))
+    error(relay)
+  end
   local ok, result, reason = pcall(function() return relay:run(config.duration) end)
   relay:close()
   if not ok then

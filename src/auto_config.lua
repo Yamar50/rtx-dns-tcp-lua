@@ -2,6 +2,7 @@
 -- No original config text or unrecognised token is included in returned errors.
 -- IPv4 calculations use octets, including on Yamaha's signed-integer Lua 5.1.
 local Auto = {}
+local Interfaces = require("interfaces")
 
 local function decimal(value, maximum)
     if type(value) ~= "string" or not value:match("^%d+$") then return nil end
@@ -73,12 +74,6 @@ local function prefix(value)
         end
     end
     return count
-end
-
-local function interface(value)
-    return value and (value:match("^lan%d+$") or value:match("^lan%d+/%d+$")
-        or value:match("^lan%d+%.%d+$") or value:match("^vlan%d+$")
-        or value == "bridge1" or value == "wan1" or value == "onu1")
 end
 
 local function name(value)
@@ -181,16 +176,21 @@ function Auto.parse(text)
                     if #t < 3 or #t > 258 then return nil, "automatic DNS ACL exceeds the host limit or is empty" end
                     for i = 3, #t do hosts[#hosts + 1] = t[i] end
                 end
-            elseif t[1] == "ip" and interface(t[2])
+            elseif t[1] == "ip" and Interfaces.valid(t[2], "address")
                 and (t[3] == "address" or (t[3] == "secondary" and t[4] == "address")) then
-                local id, slot = t[2], t[3] == "secondary" and "secondary" or "primary"
+                local id, slot = Interfaces.valid(t[2], "address"), t[3] == "secondary" and "secondary" or "primary"
                 if not interfaces[id] then
                     if #ordered >= 256 then return nil, "automatic configuration exceeds the interface limit" end
                     interfaces[id] = {}; ordered[#ordered + 1] = id
                 end
-                if interfaces[id][slot] then return nil, "automatic configuration found duplicate interface addresses" end
-                local parsed, err = subnet(t, slot == "primary" and 4 or 5)
-                interfaces[id][slot] = parsed or {error = err}
+                if interfaces[id][slot] then
+                    -- An unrelated interface must not disable the listener.
+                    -- A selected duplicate remains an unresolved ACL.
+                    interfaces[id][slot] = {error = "automatic configuration found duplicate interface addresses"}
+                else
+                    local parsed, err = subnet(t, slot == "primary" and 4 or 5)
+                    interfaces[id][slot] = parsed or {error = err}
+                end
             elseif (t[1] == "ip" and t[2] == "host") or (t[1] == "dns" and t[2] == "static") then
                 local short = t[1] == "ip"
                 local kind, owner, value, ttl = short and "host" or t[3], t[short and 3 or 4],
@@ -259,15 +259,15 @@ function Auto.parse(text)
         elseif host == "lan" then
             if #hosts ~= 1 then return nil, "automatic DNS ACL found unsupported dns host keyword mixing" end
             for _, id in ipairs(ordered) do
-                -- Recognizing ONU addresses must not expand the existing
-                -- broad LAN ACL. ONU access requires an explicit onu1 rule.
-                if id ~= "wan1" and id ~= "onu1" then
+                -- LAN shorthand uses an explicit set; recognizing another
+                -- interface kind must not grant access from that network.
+                if Interfaces.valid(id, "lan_acl") then
                     ok, err = add_interface(id)
                     if not ok then return nil, err end
                 end
             end
             ok = true
-        elseif interface(host) then ok, err = add_interface(host)
+        elseif Interfaces.valid(host, "dns_host") then ok, err = add_interface(Interfaces.valid(host, "dns_host"))
         else
             local first, last = host:match("^([^%-]+)%-([^%-]+)$")
             if first then first, last = ipv4(first), ipv4(last)

@@ -196,7 +196,7 @@ local bad_lines = {
     "dns server 192.0.2.1 192.0.2.1", "dns server 192.0.2.1 192.0.2.2 192.0.2.3 192.0.2.4 192.0.2.5",
     "dns server select", "dns server select 2147483648 192.0.2.1 any .",
     "dns server select -1 192.0.2.1 any .", "dns server select 1 pp any .",
-    "dns server select 1 dhcp any .", "dns server select 1 192.0.2.1 any . restrict pp",
+    "dns server select 1 192.0.2.1 any . restrict pp",
     "dns server select 1 192.0.2.1 192.0.2.2 192.0.2.3 any .", "dns server select 1 192.0.2.1",
     "dns server select 1 192.0.2.1 any . 198.18.32.0/33", "dns server select 1 192.0.2.1 any . 198.18.32.9-198.18.32.1",
     "dns server select 1 reject", "dns server select 1 192.0.2.1 nat46=bad any .",

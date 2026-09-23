@@ -211,6 +211,25 @@ end
 local static_only, static_calls = new("dns server 192.0.2.53", {})
 static_only:refresh(); equal(#static_calls, 0)
 source(static_only, "dhcp", "auto", "unknown")
+-- Documented DNS source kinds share status spelling across native case
+-- variants, without allowing unknown identifiers to issue CLI commands.
+for _, id in ipairs({"lan1", "lan2/3", "vlan4", "wan1", "onu1", "bridge1"}) do
+    local config = "ip " .. id .. " address dhcp\ndns server dhcp " .. id
+    local fixture, invoked = new(config, {['show status dhcpc'] = dhcp(id:upper(), nil, {"198.51.100.1"})})
+    fixture:refresh(); source(fixture, "dhcp", id, "present", {"198.51.100.1"}); equal(#invoked, 1)
+    fixture, invoked = new("ipv6 " .. id .. " dhcp service client\ndns server dhcp " .. id,
+        {['show status ipv6 dhcp'] = v6(id:upper(), {"fe80::53%" .. id})})
+    fixture:refresh(); source(fixture, "dhcp", id, "present", {"fe80::53%" .. id}); equal(#invoked, 1)
+end
+for _, id in ipairs({"future1", "tunnel1", "lan0", "lan01", "lan1/0", "wan2", "onu2", "bridge2",
+    "lan1.2", "lan2147483648", "lan1/2147483648"}) do
+    local fixture, invoked = new("dns server select 1 dhcp " .. id .. " any .\ndns server 192.0.2.53", {})
+    fixture:refresh(); source(fixture, "dhcp", id, "unknown"); equal(#invoked, 0)
+end
+-- A newly seen status interface cannot steal common IPv4 DNS addresses.
+local ambiguous = new("ip lan1 address dhcp\nip future1 address dhcp\ndns server dhcp lan1",
+    {['show status dhcpc'] = dhcp("LAN1", nil, {"198.51.100.1"})})
+ambiguous:refresh(); source(ambiguous, "dhcp", "lan1", "unknown")
 local invalid_id, invalid_calls = new("dns server select 1 pp lan1 any .", {})
 invalid_id:refresh(); equal(#invalid_calls, 0); source(invalid_id, "pp", "lan1", "unknown")
 check(static_only:register("pp", 1)); check(static_only:register("pp", "01"))

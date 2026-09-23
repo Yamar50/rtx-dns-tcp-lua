@@ -66,11 +66,14 @@ reject("ip lan1 address 192.0.2.2/32\ndns host lan1", "no permitted clients")
 equal(parse("ip lan1 address 192.0.2.42/24 broadcast 192.0.2.255\ndns host lan1").allowed_clients[1],
     "192.0.2.1-192.0.2.255")
 
--- Physical, split, tagged, port VLAN, bridge and WAN names stay distinct.
-for _, id in ipairs({"lan1", "lan1.1", "lan1/1", "vlan1", "bridge1", "wan1"}) do
+-- Direct DNS ACL arguments use the documented kinds. Split LAN addresses
+-- are still read for LAN shorthand and local router address discovery.
+for _, id in ipairs({"lan1", "lan1/1", "vlan1", "bridge1", "wan1", "onu1"}) do
     local result = parse("ip " .. id .. " address 192.0.2.1/24\ndns host " .. id)
     equal(result.allowed_clients[1], "192.0.2.1-192.0.2.255")
 end
+reject("ip lan1.1 address 192.0.2.1/24\ndns host lan1.1", "unsupported host")
+equal(parse("ip lan1.1 address 192.0.2.1/24\ndns host lan").allowed_clients[1], "192.0.2.1-192.0.2.255")
 local mixed = parse([[ip lan1 address 192.0.2.1/24
 ip lan1/1 address 198.51.100.1/24
 ip vlan1 address 203.0.113.1/24
@@ -102,6 +105,28 @@ reject("dns host 192.0.2.0/24")
 reject("dns host 192.0.2.8-192.0.2.7")
 reject("dns host 192.0.002.7")
 reject("dns host private-config-sentinel")
+for _, id in ipairs({"lan0", "lan01", "lan1/0", "lan1/01", "vlan0", "wan2", "onu2", "bridge2",
+    "lan2147483648", "lan1/2147483648", "tunnel1", "loopback1"}) do
+    reject("ip " .. id .. " address 192.0.2.1/24\ndns host " .. id)
+end
+local lan_only = parse([[ip lan1 address 192.0.2.1/24
+ip lan1.2 address 198.51.100.1/24
+ip wan1 address 203.0.113.1/24
+ip onu1 address 198.18.0.1/24
+ip future1 address 198.19.0.1/24
+dns host lan
+]])
+equal(#lan_only.allowed_clients, 2)
+check(not contains(lan_only.allowed_clients, "203.0.113.1-203.0.113.255"))
+check(not contains(lan_only.allowed_clients, "198.18.0.1-198.18.0.255"))
+-- Malformed or duplicate addresses unrelated to the selected ACL do not
+-- disable DNS, but remain errors if later selected by an explicit LAN ACL.
+local duplicate = "ip lan2 address 192.0.2.1/24\nip lan2 address 198.51.100.1/24\n"
+equal(parse(duplicate .. "dns host 127.0.0.1").allowed_clients[1], "127.0.0.1")
+reject(duplicate .. "dns host lan2", "duplicate")
+reject(duplicate .. "dns host lan", "duplicate")
+equal(parse("ip lan2 address unsupported\ndns host 127.0.0.1").allowed_clients[1], "127.0.0.1")
+equal(parse("ip LAN1 address 192.0.2.1/24\ndns host lan1").allowed_clients[1], "192.0.2.1-192.0.2.255")
 
 -- All static owner types route exactly; only ip host adds a reverse owner.
 -- MX, NS, CNAME and PTR targets do not become additional local names.

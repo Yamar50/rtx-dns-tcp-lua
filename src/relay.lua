@@ -169,8 +169,17 @@ function Relay.new(config, socket_api, logfn, wire, cache)
   assert(cfg.client_pipeline > 0 and cfg.client_pipeline <= 4, "client_pipeline must be 1..4")
   assert(cfg.max_query >= 12 and cfg.max_query <= 65535, "max_query must be 12..65535")
   assert(#cfg.allowed_clients > 0, "explicit allowed_clients is required")
+  for _, method in ipairs({ "tcp", "select", "gettime" }) do
+    assert(type(socket_api[method]) == "function", "socket." .. method .. " API is required")
+  end
+  if #cfg.local_zones > 0 or #cfg.local_names > 0 then
+    assert(type(socket_api.udp) == "function", "socket.udp API is required for local DNS")
+  end
+  local function safe_log(message)
+    if logfn then pcall(logfn, message) end
+  end
   local self = setmetatable({ cfg = cfg, api = socket_api, wire = wire,
-    cache = cache, log = logfn or function() end, clients = {}, endpoints = {}, routes = {},
+    cache = cache, log = safe_log, clients = {}, endpoints = {}, routes = {},
     jobs = {}, queue = {}, local_zones = {}, local_names = {}, client_count = 0, pending = 0, serial = 0,
     client_ips = {}, client_ip_count = 0,
     tokens = cfg.dial_burst, counters = {}, events = {}, stopped = false,
@@ -183,8 +192,16 @@ function Relay.new(config, socket_api, logfn, wire, cache)
   self.generation = 1
   self.next_policy_refresh = self.now + 30
   self:_load_routes()
-  local listener, err = socket_api.tcp()
+  local created, listener, err = pcall(socket_api.tcp)
+  if not created then error("listener socket creation failed") end
   assert(listener, "listener socket: " .. tostring(err))
+  for _, method in ipairs({ "settimeout", "bind", "listen", "accept", "connect",
+    "getpeername", "send", "receive", "close" }) do
+    local checked, present = pcall(function() return type(listener[method]) == "function" end)
+    if not checked or not present then
+      close(listener); error("TCP socket " .. method .. " API is required")
+    end
+  end
   local ok
   ok, err = call(listener, "settimeout", 0)
   if not ok then close(listener); error("listener timeout: " .. tostring(err)) end
@@ -246,8 +263,9 @@ function Relay:_load_routes()
 end
 
 function Relay:_clock()
-  local value = self.api.gettime()
-  assert(type(value) == "number", "socket.gettime() must return a number")
+  local ok, value = pcall(self.api.gettime)
+  assert(ok and type(value) == "number" and value == value and value - value == 0,
+    "socket.gettime() must return a finite number")
   if self.last_raw then
     local delta = value - self.last_raw
     -- rt.socket.gettime is uptime. A wrap/backwards jump must not postpone
@@ -558,7 +576,8 @@ function Relay:_local_start(job)
   job.udp, job.state = socket, "local"
   local result
   result, err = call(socket, "settimeout", 0)
-  if result then result, err = call(socket, "sendto", job.query.raw,
+  local raw = self.wire.local_query and self.wire.local_query(job.query, 2048) or job.query.raw
+  if result then result, err = call(socket, "sendto", raw,
     self.cfg.local_dns_host, self.cfg.local_dns_port) end
   if not result then self:_fail(job, "local_send"); return end
   job.response_deadline = self.now + self.cfg.response_timeout
@@ -818,15 +837,18 @@ function Relay:_upstream_read(ep)
 end
 
 function Relay:_local_read(job)
-  local raw, address, port = call(job.udp, "receivefrom", 65535)
+  local raw, address, port = call(job.udp, "receivefrom", 2048)
   if not raw then
     if address and not waiting(address) then self:_fail(job, "local_receive") end
     return
   end
   if address ~= self.cfg.local_dns_host or port ~= self.cfg.local_dns_port then return end
-  if not self.wire.validate_response(raw, job.query, job.query.id) then
+  if type(raw) ~= "string" or #raw > 2048 then self:_fail(job, "local_size"); return end
+  local valid = self.wire.validate_response(raw, job.query, job.query.id)
+  if not valid then
     self:_fail(job, "local_invalid"); return
   end
+  if type(valid) == "table" and valid.tc then self:_fail(job, "local_truncated"); return end
   self:_finish(job, raw, false)
 end
 
@@ -842,6 +864,7 @@ function Relay:_refresh_policy()
     -- A programming/API failure cannot leave old destinations active forever.
     for _, route in ipairs(self.cfg.dns_policy.routes) do
       route.upstreams, route.unavailable = {}, true
+      route.unavailable_kind, route.reason = "refresh_failed", "DNS runtime refresh failed"
     end
     changed = true
   end
@@ -945,7 +968,14 @@ function Relay:step()
     self:_inc("select_errors")
     self:_event("select", "select failed: " .. tostring(ok and err or readable))
     -- A persistent select error must not turn the run loop into a CPU spin.
-    if self.cfg.sleep then self.cfg.sleep(1); return true end
+    if self.cfg.sleep then
+      local slept, result = pcall(self.cfg.sleep, 1)
+      if slept and result ~= false then
+        local before = self.now
+        self.now = self:_clock()
+        if self.now > before then return true end
+      end
+    end
     self.stopped = true; return nil, "select failed"
   end
   -- select may have waited across a deadline while making a socket readable.

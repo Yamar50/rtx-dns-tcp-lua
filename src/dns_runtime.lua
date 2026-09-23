@@ -2,6 +2,7 @@
 -- Source availability is separate from the caller's transport capabilities.
 -- All numeric parsing is bounded before conversion for Yamaha integer Lua 5.1.
 local M, Reader = {}, {}
+local Interfaces = require("interfaces")
 Reader.__index = Reader
 local MAX_TEXT, MAX_LINE, MAX_SOURCES, MAX_SERVERS = 1048576, 4096, 32, 64
 
@@ -14,20 +15,9 @@ local function number(s, max)
     if #s > #bound or (#s == #bound and s > bound) then return nil end
     return tonumber(s)
 end
-local function pp_id(id)
-    if type(id) == "number" then
-        if id < 1 or id > 2147483647 or id % 1 ~= 0 then return nil end
-        id = string.format("%d", id)
-    end
-    local n = number(id, 2147483647)
-    return n and n > 0 and string.format("%d", n) or nil
-end
+local pp_id = Interfaces.pp_id
 local function interface(id)
-    if type(id) ~= "string" or #id > 64 then return nil end
-    id = id:lower()
-    if id:match("^lan%d+$") or id:match("^lan%d+[/.]%d+$")
-        or id:match("^vlan%d+$") or id:match("^wan%d+$") or id:match("^bridge%d+$")
-        or id == "onu1" then return id end
+    return Interfaces.valid(id, "status")
 end
 local function ipv4(s)
     if type(s) ~= "string" then return nil end
@@ -51,7 +41,7 @@ local function server(s)
     end
     local address, scope = s:match("^([^%%]+)%%([^%%]+)$")
     if address then
-        if not interface(scope) and not number(scope, 2147483647) then return nil end
+        if not Interfaces.valid(scope, "scope") and not number(scope, 2147483647) then return nil end
     else address = s end
     if #address > 45 or address:find("[^%x:.]") then return nil end
     local tail = address:match("([^:]+%.[^:]+)$")
@@ -311,7 +301,7 @@ end
 
 function Reader:register(kind, id)
     if kind == "pp" then id = pp_id(id)
-    elseif kind == "dhcp" then id = id == "auto" and id or interface(id)
+    elseif kind == "dhcp" then id = id == "auto" and id or Interfaces.valid(id, "dhcp")
     else return nil, "invalid dynamic DNS source kind" end
     if not id then return nil, "invalid dynamic DNS source identifier" end
     if not self.required[kind][id] then
@@ -354,7 +344,7 @@ function M.new(config, command, requirements)
             local p = t[3] == "select" and 5 or 3
             if t[p] == "pp" or t[p] == "dhcp" then
                 local id
-                if t[p] == "pp" then id = pp_id(t[p + 1]) else id = interface(t[p + 1]) end
+                if t[p] == "pp" then id = pp_id(t[p + 1]) else id = Interfaces.valid(t[p + 1], "dhcp") end
                 if id then
                     local ok, err = self:register(t[p], id)
                     if not ok then return nil, err end
@@ -385,7 +375,7 @@ end
 
 function Reader:source(kind, id)
     if kind == "pp" then id = pp_id(id)
-    elseif kind == "dhcp" then id = id == "auto" and id or interface(id) end
+    elseif kind == "dhcp" then id = id == "auto" and id or Interfaces.valid(id, "dhcp") end
     local item = self.sources[kind] and self.sources[kind][id]
     return copy(item or result("unknown", "dynamic DNS source has not been read"))
 end

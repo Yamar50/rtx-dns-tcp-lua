@@ -134,12 +134,12 @@ local ipv6 = parse([[dns server 2001:db8::1 192.0.2.254
 dns server select 1 2001:db8::2 aaaa v6.example
 dns server select 2 2001:db8::3 192.0.2.2 any mixed.example
 dns server select 3 dhcp lan4 192.0.2.3 any acquired.example]])
-check(selected(ipv6, "v6.example", 28).unavailable)
+equal(host(ipv6, "v6.example", 28), "192.0.2.254")
 equal(host(ipv6, "mixed.example"), "192.0.2.2")
 equal(host(ipv6, "elsewhere.example"), "192.0.2.254")
 state("dhcp", "lan4", "present", {"2001:db8::4"})
 ipv6:refresh(runtime)
-check(selected(ipv6, "acquired.example").unavailable, "unsupported transport is not source absence")
+equal(host(ipv6, "acquired.example"), "192.0.2.254", "IPv6-only acquisition uses ordinary DNS, not inline absence default")
 state("dhcp", "lan4", "present", {"2001:db8::4", "192.0.2.4"})
 check(ipv6:refresh(runtime))
 equal(host(ipv6, "acquired.example"), "192.0.2.4")

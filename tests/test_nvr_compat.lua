@@ -131,19 +131,19 @@ runtime:refresh(); source(runtime, "onu1", "unknown")
 local unconfigured, no_calls = reader("dns server dhcp onu1", {})
 unconfigured:refresh(); source(unconfigured, "onu1", "absent"); equal(#no_calls, 0)
 
--- Only the official ONU name is newly accepted, without adding broad onu*
--- aliases, split ports, or tagged variants to any configuration parser.
+-- Unsupported ONU spellings cannot become usable DNS or ACL sources. The
+-- policy retains them as unavailable rather than aborting unrelated routes.
 for _, id in ipairs({"onu", "onu0", "onu2", "onu01", "onu1/1", "onu1.1", "onu1x", "onu1;show"}) do
-    reject(Policy, "dns server dhcp " .. id)
-    reject(Policy, "dns server select 1 dhcp " .. id .. " any .")
+    check(selected(parse(Policy, "dns server dhcp " .. id)).unavailable)
+    check(selected(parse(Policy, "dns server select 1 dhcp " .. id .. " any .")).unavailable)
     reject(Auto, "ip " .. id .. " address 192.0.2.1/24\ndns host " .. id)
     local ok, err = unconfigured:register("dhcp", id)
     equal(ok, nil); check(type(err) == "string")
 end
 check(unconfigured:register("dhcp", "onu1"))
 
--- DHCPv6 DNS and %onu1 scope are recognized. Source availability does not
--- imply IPv6 transport support or permit fallback while IPv6 DNS is present.
+-- DHCPv6 DNS and %onu1 scope are recognized. IPv6-only acquisition advances
+-- to the later IPv4 rule, while keeping the inline default for absence only.
 local v6config = [[ipv6 lan1 dhcp service server
 ipv6 onu1 dhcp service client ir=on
 dns server select 1 dhcp onu1 203.0.113.53 any .
@@ -154,9 +154,9 @@ local v6runtime, v6calls = reader(v6config, v6responses)
 local v6policy = parse(Policy, v6config)
 v6runtime:refresh(); source(v6runtime, "onu1", "present", {"2001:db8::53", "fe80::1%onu1"})
 equal(#v6calls, 1); equal(v6calls[1], "show status ipv6 dhcp")
-v6policy:refresh(v6runtime); check(selected(v6policy).unavailable)
-equal(selected(v6policy).rule_id, 1, "IPv6-only acquisition must not skip to a later rule")
-equal(#selected(v6policy).upstreams, 0)
+v6policy:refresh(v6runtime); equal(host(v6policy), "203.0.113.54")
+equal(selected(v6policy).rule_id, 2, "IPv6-only acquisition uses a later matching IPv4 rule")
+equal(#selected(v6policy).upstreams, 1)
 for _, state in ipairs({"renew", "rebind"}) do
     v6responses["show status ipv6 dhcp"] = dhcpv6("ONU1", {"fe80::1%onu1"}, state)
     v6runtime:refresh(); source(v6runtime, "onu1", "present", {"fe80::1%onu1"})

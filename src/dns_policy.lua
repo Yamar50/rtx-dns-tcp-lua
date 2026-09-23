@@ -2,6 +2,7 @@
 -- Unknown routing semantics fail closed; diagnostics never include config.
 -- Lua 5.1 and Yamaha signed-integer Lua compatible; no 32-bit IPv4 arithmetic.
 local M = {}
+local Interfaces = require("interfaces")
 local Policy = {}
 Policy.__index = Policy
 
@@ -156,10 +157,7 @@ local function ip_literal(value)
     text = string.lower(text or value)
     if zone then
         zone = string.lower(zone)
-        if not (zone:match("^lan%d+$") or zone:match("^lan%d+[/.]%d+$")
-            or zone:match("^vlan%d+$") or zone:match("^wan%d+$") or zone:match("^bridge%d+$")
-            or zone == "onu1"
-            or decimal(zone, 2147483647)) then return nil end
+        if not (Interfaces.valid(zone, "scope") or decimal(zone, 2147483647)) then return nil end
     end
     if text:find(".", 1, true) then
         local start, tail = text:match("^(.*:)([^:]+)$")
@@ -189,11 +187,6 @@ local function ip_literal(value)
         for _, group in ipairs(b) do a[#a + 1] = group end
     elseif #a ~= 8 then return nil end
     return table.concat(a, ":") .. (zone and "%" .. zone or ""), 6
-end
-
-local function interface(value)
-    return type(value) == "string" and (value:match("^lan%d+$")
-        or value:match("^wan%d*$") or value:match("^bridge%d+$") or value == "onu1") and value or nil
 end
 
 local function options(words, p, descriptor)
@@ -232,12 +225,34 @@ end
 
 local function source_spec(words, p, selecting)
     local kind = words[p]
-    if kind == "pp" or kind == "dhcp" then
-        local id
-        if kind == "pp" then id = decimal(words[p + 1], 2147483647)
-        else id = interface(words[p + 1]) end
-        if not id then return nil, "invalid dynamic DNS source" end
-        local spec = {kind = kind, id = tostring(id), edns = false}
+    if kind == "pp" or kind == "dhcp" or kind == "pdp" then
+        local token, id, unsupported = words[p + 1]
+        if kind == "pp" then
+            id = Interfaces.pp_id(token)
+            if not id then return nil, "invalid dynamic DNS source" end
+        elseif kind == "pdp" then
+            -- NVR700W PDP has a known WAN/EDNS/inline-default boundary, but
+            -- no acquisition reader. Never treat that as confirmed absence.
+            local item = Interfaces.classify(token)
+            if not item or item.kind ~= "wan" then
+                return {kind = "opaque", unsupported = true}, p
+            end
+            id, unsupported = item.name, true
+        else
+            if not token then return nil, "invalid dynamic DNS source" end
+            id = Interfaces.valid(token, "dhcp")
+            if not id then
+                -- DHCP has exactly one interface argument. Preserve its
+                -- conditions only when that token has interface-like syntax.
+                -- Reserved/malformed tokens could indicate a missing argument.
+                if #token > 64 or not token:match("^[A-Za-z][A-Za-z0-9_./%-]*$")
+                    or types[token] ~= nil or token == "restrict" then
+                    return {kind = "opaque", unsupported = true}, p
+                end
+                id, unsupported = token, true
+            end
+        end
+        local spec = {kind = kind, id = id, edns = false, unsupported = unsupported}
         local next_p, err = options(words, p + 2, spec)
         if not next_p then return nil, err end
         if selecting then
@@ -311,7 +326,7 @@ local function selection_rule(words)
     end
     if words[p] == "restrict" then
         if words[p + 1] == "pp" then
-            local pp = decimal(words[p + 2], 2147483647)
+            local pp = Interfaces.pp_id(words[p + 2])
             if not pp then return nil, "invalid restrict PP number" end
             rule.restrict_pp = tostring(pp)
             p = p + 3
@@ -325,8 +340,8 @@ end
 local function usable(candidates)
     local out, seen = {}, {}
     for _, candidate in ipairs(candidates or {}) do
-        if candidate.unsupported then return {}, "unsupported DNS option" end
-        if candidate.nat46 then return {}, "NAT46 transformation unsupported" end
+        if candidate.unsupported then return {}, "unsupported DNS option", "options_unsupported" end
+        if candidate.nat46 then return {}, "NAT46 transformation unsupported", "nat46" end
         if candidate.family == 4 then
             if not seen[candidate.host] then
                 out[#out + 1] = {host = candidate.host, port = 53, edns = candidate.edns == true}
@@ -334,7 +349,10 @@ local function usable(candidates)
             end
         end
     end
-    if #out == 0 then return out, "IPv6 DNS transport unsupported" end
+    if #out == 0 then
+        if not candidates or #candidates == 0 then return out, "empty DNS server list", "source_unknown" end
+        return out, "IPv6 DNS transport unsupported", "ipv6_only"
+    end
     return out
 end
 
@@ -351,38 +369,46 @@ end
 
 local function resolve(spec, runtime, ordinary)
     if spec.kind == "reject" then return {}, nil, "reject" end
-    if spec.kind == "opaque" or spec.unsupported then return {}, "unsupported DNS source", "unknown" end
+    if spec.kind == "opaque" or spec.unsupported then
+        return {}, "unsupported DNS source", "unknown", "source_unsupported"
+    end
     if spec.kind == "fixed" then
-        local out, reason = usable(spec.candidates)
-        return out, reason, reason and "unsupported" or "present"
+        local out, reason, unavailable_kind = usable(spec.candidates)
+        return out, reason, reason and "unsupported" or "present", unavailable_kind
     end
     local state = source(runtime, spec.kind, spec.id)
-    if state.state == "unknown" then return {}, state.reason, "unknown" end
+    if state.state == "unknown" then return {}, state.reason, "unknown", "source_unknown" end
     if state.state == "absent" then
         if spec.defaults and #spec.defaults > 0 then
-            local out, reason = usable(spec.defaults)
-            return out, reason, reason and "unsupported" or "default"
+            local out, reason, unavailable_kind = usable(spec.defaults)
+            return out, reason, reason and "unsupported" or "default", unavailable_kind
         end
         if spec.kind == "dhcp" and ordinary then
-            return ordinary.upstreams, ordinary.reason, "ordinary"
+            return ordinary.upstreams, ordinary.reason, "ordinary", ordinary.unavailable_kind
         end
-        return {}, "DNS source has no acquired servers", "absent"
+        return {}, "DNS source has no acquired servers", "absent", "source_absent"
     end
     if type(state.servers) ~= "table" or #state.servers == 0 or #state.servers > 4 then
-        return {}, "invalid acquired DNS server list", "unknown"
+        return {}, "invalid acquired DNS server list", "unknown", "source_unknown"
+    end
+    for key in pairs(state.servers) do
+        if type(key) ~= "number" or key < 1 or key > #state.servers or key % 1 ~= 0 then
+            return {}, "invalid acquired DNS server list", "unknown", "source_unknown"
+        end
     end
     local candidates = {}
-    for _, value in ipairs(state.servers) do
+    for i = 1, #state.servers do
+        local value = state.servers[i]
         local host, family = ip_literal(value)
-        if not host then return {}, "invalid acquired DNS server", "unknown" end
+        if not host then return {}, "invalid acquired DNS server", "unknown", "source_unknown" end
         candidates[#candidates + 1] = {host = host, family = family, edns = spec.edns, nat46 = spec.nat46}
     end
-    local out, reason = usable(candidates)
-    return out, reason, reason and "unsupported" or "present"
+    local out, reason, unavailable_kind = usable(candidates)
+    return out, reason, reason and "unsupported" or "present", unavailable_kind
 end
 
 local function signature(route)
-    local out = {route.reason or "", route.status or "", route.restrict_state or "",
+    local out = {route.reason or "", route.status or "", route.restrict_state or "", route.unavailable_kind or "",
         route.unavailable and "unavailable" or "available"}
     for _, endpoint in ipairs(route.upstreams) do
         out[#out + 1] = endpoint.host .. ":" .. endpoint.port .. ":" .. tostring(endpoint.edns)
@@ -394,7 +420,7 @@ function Policy:refresh(runtime)
     local before, changed, diagnostics = {}, false, {}
     for _, route in ipairs(self.routes) do before[route] = signature(route) end
     local function assign(route, ordinary)
-        route.upstreams, route.reason, route.status = resolve(route.spec, runtime, ordinary)
+        route.upstreams, route.reason, route.status, route.unavailable_kind = resolve(route.spec, runtime, ordinary)
         route.unavailable = route.reason ~= nil
     end
     if self.fallback then assign(self.fallback) end
@@ -412,6 +438,7 @@ function Policy:refresh(runtime)
             route.upstreams = {}
             route.unavailable = true
             route.reason = rule.opaque and "unsupported selection condition" or "restrict PP state unknown"
+            route.unavailable_kind = rule.opaque and "condition_unknown" or "restrict_unknown"
         end
         -- Unsupported reject conditions must SERVFAIL, not drop a query on
         -- a condition that was never established.
@@ -430,6 +457,7 @@ function Policy:refresh(runtime)
         for _, route in ipairs(self.routes) do
             if not route.reject then
                 route.upstreams, route.unavailable, route.reason = {}, true, self.limit_error
+                route.unavailable_kind = "endpoint_limit"
             end
         end
         count = 0
@@ -490,7 +518,9 @@ function M.parse(config_text, limits)
     table.sort(rules, function(a, b) return a.id < b.id end)
     local routes, fallback = {}, nil
     for _, rule in ipairs(rules) do routes[#routes + 1] = rule.route end
-    local chosen = ordinary.opaque or ordinary.fixed or ordinary.pp or ordinary.dhcp
+    -- NVR ordinary source priority is fixed > PP > PDP > DHCP. A recognized
+    -- unsupported PDP source blocks DHCP without masking a fixed/PP setting.
+    local chosen = ordinary.opaque or ordinary.fixed or ordinary.pp or ordinary.pdp or ordinary.dhcp
     if command_count == 0 then chosen = {kind = "dhcp", id = "auto", edns = false}; dynamic = true end
     if chosen then
         fallback = {policy_id = "default", upstreams = {}, fallback = true, spec = chosen}
@@ -523,6 +553,7 @@ function Policy:select(query, client_address)
     local text, err = query_text(query)
     if not text then return nil, err end
     local reverse = query.qtype == 12 and ptr_address(text) or nil
+    local first_ipv6_only
     for _, rule in ipairs(self.rules) do
         if (not rule.qtype or rule.qtype == 0 or rule.qtype == query.qtype)
             and address_matches(sender, rule.source) and rule.route.restrict_state ~= "down" then
@@ -531,10 +562,19 @@ function Policy:select(query, client_address)
                 if rule.qtype == 12 then matched = reverse and address_matches(reverse, rule.matcher)
                 else matched = text_matches(text, rule.matcher) end
             end
-            if matched then return rule.route end
+            if matched then
+                -- Only a completely understood IPv6-only destination may be
+                -- bypassed. Unknown conditions, sources and failures stop here.
+                if rule.route.unavailable and rule.route.unavailable_kind == "ipv6_only" then
+                    first_ipv6_only = first_ipv6_only or rule.route
+                else return rule.route end
+            end
         end
     end
-    if not self.fallback then return nil, "no matching DNS route or fallback" end
+    if not self.fallback then
+        if first_ipv6_only then return first_ipv6_only end
+        return nil, "no matching DNS route or fallback"
+    end
     return self.fallback
 end
 

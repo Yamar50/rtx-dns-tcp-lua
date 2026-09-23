@@ -23,7 +23,7 @@ end
 
 local function reader(text)
   local calls = {command = 0, socket = 0}
-  local runtime = {command = function(command)
+  local runtime = {sleep = function() end, command = function(command)
     calls.command = calls.command + 1
     check(command == 'show config', 'one running config command')
     return true, text
@@ -173,7 +173,7 @@ Relay.new = function(_config, _socket, log)
 end
 print = function(message) console[#console + 1] = message end
 local logging_ok, logging_error = pcall(main.start, {dns_config = 'static'}, {
-  socket = {}, syslog = function(level, message)
+  socket = {}, sleep = function() end, syslog = function(level, message)
     check(level == 'info', 'SYSLOG level remains info')
     check(#message <= 231, 'every SYSLOG record fits the Yamaha limit')
     sent[#sent + 1] = message
@@ -237,5 +237,31 @@ for _, profile in ipairs({{auto_config = 'yes'}, {auto_config = true, dns_config
 end
 rejected_start(reader(unrelated .. routes .. 'dns host none\n'),
   'native DNS access disabled in auto mode', nil, {auto_config = true})
+
+-- Logger failures must not replace a startup/runtime error or leak resources.
+local saved_new, saved_print = Relay.new, print
+local closed = 0
+Relay.new = function(_, _, log)
+  log('initialization log')
+  return {run = function() error('original-runtime-failure') end,
+    close = function() closed = closed + 1 end}
+end
+print = function() error('console-failure') end
+local guarded, guarded_error = pcall(main.start, {dns_config = 'static'}, {
+  socket = {}, sleep = function() end, syslog = function() error('syslog-failure') end})
+print, Relay.new = saved_print, saved_new
+check(not guarded and tostring(guarded_error):find('original-runtime-failure',1,true), 'original failure survives broken log APIs')
+check(closed == 1, 'runtime failure releases relay')
+for _, missing in ipairs({'sleep','syslog'}) do
+  local r = {socket = {}, sleep = function() end, syslog = function() end}
+  r[missing] = nil
+  local ok, reason = pcall(main.start, {dns_config = 'static', console_log = false}, r)
+  check(not ok and tostring(reason):find('runtime.' .. missing .. ' API is required',1,true), 'missing API: ' .. missing)
+end
+Relay.new = function() error('original-constructor-failure') end
+local ok_constructor, error_constructor = pcall(main.start, {dns_config = 'static', console_log = false}, {
+  socket = {}, sleep = function() end, syslog = function() error('broken-log') end})
+Relay.new = saved_new
+check(not ok_constructor and tostring(error_constructor):find('original-constructor-failure',1,true), 'constructor failure is reported without logger masking')
 
 print('main policy and logging checks passed: ' .. count)

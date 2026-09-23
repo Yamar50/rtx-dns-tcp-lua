@@ -354,7 +354,7 @@ function tests.select_error_stops_or_sleeps()
   r:close()
   env = mock({ select_error = true })
   local sleeps = 0
-  r = relay(env, { sleep = function(seconds) sleeps = sleeps + seconds end })
+  r = relay(env, { sleep = function(seconds) sleeps = sleeps + seconds; env.time = env.time + seconds end })
   steps(r, 3)
   eq(sleeps, 3)
   r:close()
@@ -1642,6 +1642,107 @@ function tests.unavailable_route_servfails_without_dial_and_refresh_recovers()
   eq(recovered.output, frame(answer(query(2011))))
   eq(#env.tcp_dials, 1)
   r:close()
+end
+
+function tests.required_apis_and_initialization_failures_are_bounded()
+  for _, name in ipairs({"tcp", "select", "gettime", "udp"}) do
+    local env = mock(); env.api[name] = nil
+    local ok, err = pcall(relay, env)
+    eq(ok, false); assert(tostring(err):find("socket." .. name, 1, true))
+    eq(env.tcp_created, 0, "API absence fails before creating listener")
+  end
+  for _, mode in ipairs({"throw", "bad-time", "bind", "listen", "missing-method"}) do
+    local env = mock()
+    local original = env.api.tcp
+    env.api.tcp = function()
+      if mode == "throw" then error("private-factory-details") end
+      local socket = original()
+      if mode == "bind" or mode == "listen" then socket[mode] = function() error("operation failed") end end
+      if mode == "missing-method" then socket.receive = false end
+      return socket
+    end
+    if mode == "bad-time" then env.api.gettime = function() return "not-a-clock" end end
+    local ok, err = pcall(relay, env)
+    eq(ok, false)
+    if mode == "throw" then assert(not tostring(err):find("private-factory-details", 1, true)) end
+    for _, socket in ipairs(env.sockets) do eq(socket.closed, true, "failed initialization closes created listener") end
+  end
+  local env = mock()
+  local r = Relay.new({allowed_clients = {"198.18.32.0/20"}, upstreams = {{host = "192.0.2.53"}}},
+    env.api, function() error("broken logger") end, wire)
+  r:close()
+  eq(env.sockets[1].closed, true, "broken startup logger cannot leak listener")
+end
+
+function tests.failed_or_nonwaiting_sleep_cannot_spin()
+  for _, mode in ipairs({"throw", "false", "no-wait"}) do
+    local env = mock({select_error = true})
+    local r = relay(env, {sleep = function()
+      if mode == "throw" then error("sleep failed") end
+      if mode == "false" then return false end
+    end})
+    local ok, err = r:step()
+    eq(ok, nil); eq(err, "select failed"); eq(r.stopped, true)
+    r:close()
+  end
+end
+
+function tests.local_udp_size_edns_tc_and_source_boundaries()
+  local real_wire = require("dns_wire")
+  local question = "\6router\4home\4arpa\0" .. u16(16) .. u16(1)
+  local function qraw(size)
+    return u16(301) .. "\1\16\0\1\0\0\0\0" .. u16(size and 1 or 0) .. question
+      .. (size and ("\0\0\41" .. u16(size) .. "\0\0\128\0\0\0") or "")
+  end
+  local function reply(q, size, tc)
+    local header = u16(q.id) .. u16(tc and 33664 or 33152) .. "\0\1\0\1\0\0\0\0" .. q.question
+    local remaining, chunks = size - #header - 12, {}
+    while remaining > 0 do
+      local bytes = math.min(255, remaining - 1)
+      chunks[#chunks + 1] = string.char(bytes) .. string.rep("x", bytes)
+      remaining = remaining - bytes - 1
+    end
+    local data = table.concat(chunks)
+    return header .. "\192\12\0\16\0\1\0\0\0\30" .. u16(#data) .. data
+  end
+  for _, case in ipairs({
+    {"plain", nil, 512, 0}, {"small-edns", 1232, 512, 0}, {"cap-edns", 4096, 2048, 0},
+    {"limit-edns", 2048, 2048, 0}, {"tc", 4096, 512, 2}, {"over-limit", 4096, 2049, 2},
+    {"incomplete", 4096, 2049, 2}, {"wrong-source", 4096, 512, 2}
+  }) do
+    local env = mock(); local original_udp = env.api.udp
+    local sent_query
+    env.api.udp = function()
+      local socket = original_udp()
+      socket.sendto = function(s, raw, host, port)
+        sent_query = assert(real_wire.parse_query(raw))
+        eq(sent_query.edns_udp_size, case[2] and math.min(case[2],2048) or nil)
+        eq(sent_query.cd, true); eq(sent_query.do_bit == true, case[2] ~= nil)
+        local response = reply(sent_query, case[3], case[1] == "tc")
+        if case[1] == "incomplete" then response = response:sub(1,2048) end
+        s.udp_response, s.remote_host, s.remote_port = response,
+          case[1] == "wrong-source" and "192.0.2.99" or host, port
+        env.udp_count = env.udp_count + 1
+        return #raw
+      end
+      socket.receivefrom = function(s, maximum)
+        eq(maximum, 2048, "Yamaha UDP receive ceiling")
+        local raw = s.udp_response; s.udp_response = nil
+        if raw then return raw, s.remote_host, s.remote_port end
+        return nil, "timeout"
+      end
+      return socket
+    end
+    local raw = qraw(case[2])
+    local r = relay(env, {local_zones = {}, local_names = {"router.home.arpa"}}, nil, real_wire)
+    local c = env.client(raw)
+    until_true(r, function() return #c.output >= 2 and #c.output == id(c.output) + 2 end)
+    local response = assert(real_wire.validate_response(c.output:sub(3), assert(real_wire.parse_query(raw))))
+    eq(response.rcode, case[4], case[1]); eq(response.tc, false)
+    eq(env.upstream_queries, 0, "local names never escape to external TCP")
+    eq(#env.tcp_dials, 0); eq(env.udp_count, 1)
+    r:close()
+  end
 end
 
 local names = {}

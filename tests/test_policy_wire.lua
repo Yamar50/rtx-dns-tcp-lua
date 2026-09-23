@@ -49,4 +49,19 @@ local additional = '\192\12\0\1\0\1\0\0\0\30\0\4\192\0\2\11'
 check(not wire.downstream_response(response(plain,opt()..additional,2),plain,{edns=true}))
 check(wire.downstream_response(response(plain),plain,{edns=true}) == response(plain))
 check(not wire.downstream_response('bad',plain,{edns=true}))
+check(wire.local_query(plain,2048) == plain.raw, 'local UDP never adds EDNS')
+check(wire.local_query(edns,2048) == edns.raw, 'smaller UDP advertisement stays unchanged')
+for _, size in ipairs({512,1232,2048,4096,65535}) do
+  local extra = '\0\0\41' .. u16(size) .. '\0\0\128\0\0\8\0\10\0\4abcd'
+  local raw_query = make_query(extra)
+  raw_query = raw_query:sub(1,3) .. '\16' .. raw_query:sub(5) -- CD remains set.
+  local q = assert(wire.parse_query(raw_query))
+  local sent = wire.local_query(q,2048)
+  local parsed = assert(wire.parse_query(sent))
+  check(parsed.edns_udp_size == math.min(size,2048), 'local UDP cap ' .. size)
+  check(parsed.id == q.id and parsed.question == q.question and parsed.cd and parsed.do_bit)
+  local position = q.opt.ttl_pos - 2
+  check(sent:sub(1,position-1) == raw_query:sub(1,position-1)
+    and sent:sub(position+2) == raw_query:sub(position+2), 'only EDNS size bytes may change')
+end
 print('policy wire checks passed: ' .. count)
