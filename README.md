@@ -11,7 +11,7 @@
 - **スクリプトの個別設定は不要**：上流DNS、問い合わせを許可する端末・LAN、簡易DNSの登録内容を、起動時にYAMAHA RTXの設定から自動で読み込みます。Luaファイルを編集する必要はありません。
 - **既存の内蔵DNSと共存**：通常のUDP問い合わせは従来どおり内蔵DNSが処理します。登録済みの簡易DNSレコードも内蔵DNSへ問い合わせ、スクリプトがYAMAHA RTXの設定を書き換えることはありません。
 
-[ダウンロード（GitHub Releases）](https://github.com/Yamar50/rtx-dns-tcp-lua/releases/latest) · [インストール手順](docs/install.md)
+[ダウンロード（GitHub Releases）](https://github.com/Yamar50/rtx-dns-tcp-lua/releases/latest) · [インストール手順](docs/install.md) · [対応見込み機種・最低ファームウェア・動作確認](docs/compatibility.md)
 
 ## このスクリプトがあると…
 
@@ -79,7 +79,7 @@ v0.1.2で確認した次の3点を修正しました。
 
 このリポジトリには、MITなどのソフトウェアライセンスを設定していません。生成方法と既存OSSとの照合結果は [コードの来歴と確認範囲](docs/code-provenance.md) を参照してください。
 
-YAMAHA RTXの内蔵UDP DNSと静的ホスト登録を維持し、LuaでTCP DNSを補完します。開発時の実機検証対象は **YAMAHA RTX830 Rev.15.02.33** と **YAMAHA RTX1210 Rev.14.01.42**、どちらも整数版Lua 5.1.5（機能1.08）です。**YAMAHA RTX1300 Rev.23.00.19については、協力者からv0.1.2の`rtx-dns.lua`での動作確認報告をいただいています。** v0.1.3・v0.1.4の実機検証には含めていません。YAMAHA RTX810は未検証です。[動作確認一覧](docs/validation.md#実機)
+YAMAHA RTXの内蔵UDP DNSと静的ホスト登録を維持し、LuaでTCP DNSを補完します。v0.1.4は **YAMAHA RTX830・YAMAHA RTX1210** で実機検証しています。他機種の対応見込み、最低ファームウェア、協力者からの報告は[対応機種の管理表](docs/compatibility.md)にまとめています。API上の対応見込みと、特定の版での動作確認を分けて記載しています。
 
 ```text
 クライアント ── UDP/53 ── YAMAHA RTX内蔵DNS
