@@ -50,7 +50,7 @@ sequenceDiagram
     Upstream-->>Native: UDPでは応答が収まらない<br/>TCPで再問い合わせしてください
     Native-->>Client: UDPでは応答が収まらない<br/>TCPで再問い合わせしてください
     Client-xNative: 同じYAMAHA RTXへTCPで再問い合わせ
-    Note over Client,Native: TCP未対応のため、この応答を取得できない
+    Note over Client,Native: TCP未対応のため、<br/>YAMAHA RTXは問い合わせを処理しない<br/>結果：タイムアウトなどのエラー
 ```
 
 通常のUDP問い合わせは、スクリプトの有無にかかわらず内蔵DNSが処理します。YAMAHA RTXに登録した簡易DNSのレコードも引き続き利用できます。TCPで問い合わせ直す動作は[RFC 7766](https://www.rfc-editor.org/rfc/rfc7766.html#section-4)に、内蔵DNSのTCP未対応は[ヤマハ公式FAQ](https://www.rtpro.yamaha.co.jp/RT/FAQ/TCPIP/dns-recursive-server.html)に説明があります。
