@@ -158,6 +158,7 @@ local function ip_literal(value)
         zone = string.lower(zone)
         if not (zone:match("^lan%d+$") or zone:match("^lan%d+[/.]%d+$")
             or zone:match("^vlan%d+$") or zone:match("^wan%d+$") or zone:match("^bridge%d+$")
+            or zone == "onu1"
             or decimal(zone, 2147483647)) then return nil end
     end
     if text:find(".", 1, true) then
@@ -192,7 +193,7 @@ end
 
 local function interface(value)
     return type(value) == "string" and (value:match("^lan%d+$")
-        or value:match("^wan%d*$") or value:match("^bridge%d+$")) and value or nil
+        or value:match("^wan%d*$") or value:match("^bridge%d+$") or value == "onu1") and value or nil
 end
 
 local function options(words, p, descriptor)

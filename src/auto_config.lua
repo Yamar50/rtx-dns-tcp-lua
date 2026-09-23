@@ -78,7 +78,7 @@ end
 local function interface(value)
     return value and (value:match("^lan%d+$") or value:match("^lan%d+/%d+$")
         or value:match("^lan%d+%.%d+$") or value:match("^vlan%d+$")
-        or value == "bridge1" or value == "wan1")
+        or value == "bridge1" or value == "wan1" or value == "onu1")
 end
 
 local function name(value)
@@ -259,7 +259,9 @@ function Auto.parse(text)
         elseif host == "lan" then
             if #hosts ~= 1 then return nil, "automatic DNS ACL found unsupported dns host keyword mixing" end
             for _, id in ipairs(ordered) do
-                if id ~= "wan1" then
+                -- Recognizing ONU addresses must not expand the existing
+                -- broad LAN ACL. ONU access requires an explicit onu1 rule.
+                if id ~= "wan1" and id ~= "onu1" then
                     ok, err = add_interface(id)
                     if not ok then return nil, err end
                 end
