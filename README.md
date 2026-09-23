@@ -11,7 +11,7 @@
 - **スクリプトの個別設定は不要**：上流DNS、問い合わせを許可する端末・LAN、簡易DNSの登録内容を、起動時にYAMAHA RTXの設定から自動で読み込みます。Luaファイルを編集する必要はありません。
 - **既存の内蔵DNSと共存**：通常のUDP問い合わせは従来どおり内蔵DNSが処理します。登録済みの簡易DNSレコードも内蔵DNSへ問い合わせ、スクリプトがYAMAHA RTXの設定を書き換えることはありません。
 
-[ダウンロード（GitHub Releases）](https://github.com/Yamar50/rtx-dns-tcp-lua/releases/latest) · [インストール手順](docs/install.md) · [対応見込み機種・最低ファームウェア・動作確認](docs/compatibility.md)
+[ダウンロード（GitHub Releases）](https://github.com/Yamar50/rtx-dns-tcp-lua/releases/latest) · [インストール手順](docs/install.md) · [対応機種・最低ファームウェア・動作確認](docs/compatibility.md)
 
 ## このスクリプトがあると…
 
