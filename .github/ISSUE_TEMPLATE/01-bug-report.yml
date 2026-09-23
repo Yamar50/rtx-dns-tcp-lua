@@ -1,0 +1,60 @@
+# OpenAI Codexで作成。
+name: 不具合の報告
+description: 起動しない、名前解決できないなどの不具合をお知らせください。
+title: "[不具合] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ご報告ありがとうございます。分かる範囲でご記入ください。必須項目も、分からない場合は「不明」で構いません。Luaコードを調べたり修正したりする必要はありません。
+
+        設定全体やパスワードなどの認証情報は不要です。ログ・設定行を添える場合も認証情報は含めず、IPアドレスやホスト名は必要に応じて伏せてください。
+  - type: input
+    id: model
+    attributes:
+      label: 機種名
+      description: 動作が見込まれる機種の一覧にない機種もご記入いただけます。
+      placeholder: 例：RTX830、NVR510、不明
+    validations:
+      required: true
+  - type: input
+    id: firmware
+    attributes:
+      label: ファームウェアの版
+      placeholder: 例：Rev.15.02.33、不明
+    validations:
+      required: true
+  - type: input
+    id: script_version
+    attributes:
+      label: スクリプトの版
+      description: 独自の修正を加えている場合は、そのこともお知らせください。
+      placeholder: 例：v0.9.9、v0.1.4、不明
+    validations:
+      required: true
+  - type: textarea
+    id: symptoms
+    attributes:
+      label: 起きていること
+      description: 実行した操作、期待した動作、実際の結果を分かる範囲でお知らせください。
+      placeholder: 例：スクリプトを起動したところ、すぐに終了しました。通常のUDP問い合わせには応答しています。
+    validations:
+      required: true
+  - type: input
+    id: interface
+    attributes:
+      label: 関係しそうなインターフェース名（任意）
+      description: 分かる場合だけご記入ください。一覧にない名前もそのまま記入できます。
+      placeholder: 例：lan1、onu1、pp 1
+  - type: textarea
+    id: logs
+    attributes:
+      label: DNSRELAYのエラーログ（任意）
+      description: 該当するログだけで構いません。設定行番号が表示されていれば含めてください。
+      render: text
+  - type: textarea
+    id: dns_config
+    attributes:
+      label: 該当するDNS設定行（任意）
+      description: dns server、dns server select、dns hostなど、関係しそうな行だけをご記入ください。設定全体は不要です。
+      render: text

@@ -1,0 +1,45 @@
+# OpenAI Codexで作成。
+name: 動作の報告
+description: 「この機種で動いた」という確認結果をお知らせください。
+title: "[動作報告] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ご報告ありがとうございます。「この機種で動いた」という情報も助かります。分かる範囲でご記入ください。必須項目も、分からない場合は「不明」で構いません。
+
+        設定全体やパスワードなどの認証情報は不要です。IPアドレスやホスト名は必要に応じて伏せてください。すべての機能を試す必要はありません。
+  - type: input
+    id: model
+    attributes:
+      label: 機種名
+      description: 動作が見込まれる機種の一覧にない機種もご記入いただけます。
+      placeholder: 例：RTX830、NVR510、不明
+    validations:
+      required: true
+  - type: input
+    id: firmware
+    attributes:
+      label: ファームウェアの版
+      placeholder: 例：Rev.15.02.33、不明
+    validations:
+      required: true
+  - type: input
+    id: script_version
+    attributes:
+      label: スクリプトの版
+      description: 独自の修正を加えている場合は、そのこともお知らせください。
+      placeholder: 例：v0.9.9、v0.1.4、不明
+    validations:
+      required: true
+  - type: textarea
+    id: checked_behavior
+    attributes:
+      label: 確認した動作
+      description: 実際に試した問い合わせや使い方、結果をお知らせください。
+      placeholder: |
+        例：外部のA・AAAA・大型TXTをTCPで取得できました。
+        ルーターに登録した名前も解決できました。
+        使い始めてからの期間や、ほかに試したことがあれば追記してください。
+    validations:
+      required: true
