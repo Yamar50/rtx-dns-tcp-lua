@@ -66,6 +66,7 @@ local function mock(options)
   end
   function methods:close() self.closed = true; self.close_count = (self.close_count or 0) + 1; return 1 end
   function methods:receive(n)
+    self.receive_count = (self.receive_count or 0) + 1
     local amount = math.min(n, #self.input, options.read_chunk or n)
     local part = string.sub(self.input, 1, amount)
     self.input = string.sub(self.input, amount + 1)
@@ -129,7 +130,7 @@ local function mock(options)
       end
       for _, s in ipairs(writers) do
         assert(not s.closed, "closed socket monitored for write")
-        if s.mode ~= "unreachable" then
+        if s.mode ~= "unreachable" and not s.write_blocked then
           if s.kind == "upstream" and s.mode ~= "refused" then s.connected = true end
           w[#w + 1] = s
         end
@@ -428,6 +429,177 @@ function tests.maximum_65535_response_partial_and_client_halfclose()
   eq(c.output, frame(answer(q)))
   eq(c.closed, true, "half-closed client receives full response before close")
   eq(#env.tcp_dials, 1)
+  r:close()
+end
+
+function tests.halfclose_drains_buffered_batches_with_partial_writes()
+  for _, pipeline in ipairs({ 1, 4 }) do
+    for _, count in ipairs({ 1, 4, 5, 6, 13 }) do
+      for _, cached in ipairs({ false, true }) do
+        local env = mock({ send_chunk = 3 }); env.select_advance = 0
+        local cache = cached and { get = function(_, q) return answer(q.raw) end } or nil
+        local r = relay(env, { client_pipeline = pipeline }, cache)
+        local c, expected = env.client(), ""
+        for n = 1, count do
+          c.input = c.input .. frame(query(2100 + n))
+          expected = expected .. frame(answer(query(2100 + n)))
+        end
+        c.eof = true
+        until_true(r, function()
+          local state = r.clients[c]
+          if state then
+            assert(state.jobs + #state.output <= pipeline, "half-close preserves client pipeline bound")
+            if state.read_eof then eq(state.read_deadline, nil, "EOF has no read deadline") end
+          end
+          assert(r.pending <= r.cfg.max_pending, "half-close preserves global pending bound")
+          for _, ep in ipairs(r.endpoints) do assert(ep.count <= r.cfg.pipeline, "upstream pipeline bound") end
+          return c.closed
+        end)
+        eq(c.output, expected, "all buffered replies survive EOF and partial writes")
+        eq(c.receive_count, 1, "EOF socket is not read again")
+        eq(env.upstream_queries, cached and 0 or count)
+        eq(r:stats_snapshot().queries, count)
+        eq(r:stats_snapshot().client_responses_sent, count)
+        eq(r.pending, 0)
+        eq(c.close_count, 1)
+        r:close()
+      end
+    end
+  end
+end
+
+function tests.halfclose_discards_only_truncated_final_frame()
+  local tail = frame(query(2299))
+  for _, count in ipairs({ 0, 1, 5, 9 }) do
+    for _, size in ipairs({ 1, 2, #tail - 1 }) do
+      local env = mock({ send_chunk = 3 }); env.select_advance = 0
+      local r = relay(env)
+      local c, expected = env.client(), ""
+      for n = 1, count do
+        c.input = c.input .. frame(query(2200 + n))
+        expected = expected .. frame(answer(query(2200 + n)))
+      end
+      c.input, c.eof = c.input .. string.sub(tail, 1, size), true
+      until_true(r, function() return c.closed end)
+      eq(c.output, expected, "complete frames receive replies; truncated tail receives none")
+      eq(env.upstream_queries, count)
+      eq(r:stats_snapshot().queries or 0, count)
+      eq(r.pending, 0)
+      eq(c.close_count, 1)
+      r:close()
+    end
+  end
+end
+
+function tests.buffered_batches_without_eof_accept_later_frame_completion()
+  local env = mock({ send_chunk = 3 }); env.select_advance = 0
+  local r = relay(env)
+  local c, expected = env.client(), ""
+  for n = 1, 9 do
+    c.input = c.input .. frame(query(2300 + n))
+    expected = expected .. frame(answer(query(2300 + n)))
+  end
+  local tail = frame(query(2310))
+  c.input = c.input .. string.sub(tail, 1, 1)
+  until_true(r, function() return #c.output == #expected end)
+  eq(c.output, expected)
+  eq(c.closed, nil, "connection without EOF stays open")
+  eq(r.clients[c].input, string.sub(tail, 1, 1), "partial frame is retained without EOF")
+  assert(r.clients[c].read_deadline, "partial frame retains its deadline")
+  c.input = string.sub(tail, 2)
+  expected = expected .. frame(answer(query(2310)))
+  until_true(r, function() return #c.output == #expected end)
+  eq(c.output, expected)
+  eq(c.closed, nil)
+  eq(env.upstream_queries, 10)
+  r:close()
+end
+
+function tests.halfclose_buffered_frames_wait_for_jobs_without_read_timeout()
+  local held, release = {}, false
+  local env = mock({ respond = function(socket, request)
+    if release then socket.input = socket.input .. frame(answer(request))
+    else held[#held + 1] = { socket = socket, request = request } end
+  end }); env.select_advance = 0
+  local r = relay(env, { response_timeout = 10, total_timeout = 20 })
+  local c, expected = env.client(), ""
+  for n = 1, 6 do
+    c.input = c.input .. frame(query(2400 + n))
+    expected = expected .. frame(answer(query(2400 + n)))
+  end
+  c.eof = true
+  until_true(r, function() return #held == 4 end)
+  eq(r.clients[c].read_eof, true)
+  assert(#r.clients[c].input > 0, "complete frames wait behind active jobs")
+  env.time = 4
+  steps(r, 1)
+  eq(c.closed, nil, "read timeout does not discard buffered frames after EOF")
+  release = true
+  for _, item in ipairs(held) do item.socket.input = item.socket.input .. frame(answer(item.request)) end
+  until_true(r, function() return c.closed end)
+  eq(c.output, expected)
+  eq(env.upstream_queries, 6)
+  r:close()
+end
+
+function tests.halfclose_backpressure_preserves_bounds_and_resumes()
+  local env = mock({ send_chunk = 3 })
+  local r = relay(env)
+  local c, expected = env.client(), ""
+  for n = 1, 9 do
+    c.input = c.input .. frame(query(2500 + n))
+    expected = expected .. frame(answer(query(2500 + n)))
+  end
+  c.eof, c.write_blocked = true, true
+  until_true(r, function() return r.clients[c] and #r.clients[c].output == 4 end)
+  local buffered, before = r.clients[c].input, env.time
+  steps(r, 1)
+  eq(env.time - before, r.cfg.select_timeout, "backpressure allows select to wait")
+  eq(r.clients[c].input, buffered, "full output queue stops further buffered queries")
+  eq(#r.clients[c].output, 4)
+  eq(env.upstream_queries, 4)
+  eq(c.receive_count, 1, "EOF does not produce repeated readable wakeups")
+  c.write_blocked = false
+  until_true(r, function() return c.closed end)
+  eq(c.output, expected, "buffered work resumes when client becomes writable")
+  eq(env.upstream_queries, 9)
+  r:close()
+end
+
+function tests.halfclose_backpressure_keeps_hard_output_deadline()
+  local env = mock(); env.select_advance = 0
+  local r = relay(env)
+  local c = env.client()
+  for n = 1, 9 do c.input = c.input .. frame(query(2600 + n)) end
+  c.eof, c.write_blocked = true, true
+  until_true(r, function() return r.clients[c] and #r.clients[c].output == 4 end)
+  env.time = 2
+  steps(r, 1)
+  eq(c.closed, true, "EOF drain is still bounded by the output deadline")
+  eq(c.output, "")
+  eq(env.upstream_queries, 4, "stalled output prevents further buffered queries")
+  eq(r.pending, 0)
+  eq(r:stats_snapshot().client_timeouts, 1)
+  r:close()
+end
+
+function tests.halfclose_rate_cutoff_ignores_remaining_buffered_queries()
+  local env = mock({ send_chunk = 3 }); env.select_advance = 0
+  local cache = { get = function(_, q) return answer(q.raw) end }
+  local r = relay(env, { query_rate_per_ip = 1, query_burst_per_ip = 5 }, cache)
+  local c, expected = env.client(), ""
+  for n = 1, 9 do
+    c.input = c.input .. frame(query(2700 + n))
+    if n <= 5 then expected = expected .. frame(answer(query(2700 + n))) end
+  end
+  c.eof = true
+  until_true(r, function() return c.closed end)
+  eq(c.output, expected .. frame(wire.error_response(query(2706), 2)),
+    "EOF still returns one rate failure after accepted replies and ignores the remaining frames")
+  eq(r:stats_snapshot().queries, 6)
+  eq(r:stats_snapshot().queries_rate_limited, 1)
+  eq(env.upstream_queries, 0)
+  eq(r.pending, 0)
   r:close()
 end
 

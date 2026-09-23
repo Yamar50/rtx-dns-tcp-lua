@@ -39,7 +39,7 @@ local function txt_data(length)
     return table.concat(parts)
 end
 
-local tiny_txt = "\0\0\16\0\1\0\0\0\120\0\1\0"
+local tiny_txt = "\192\12\0\16\0\1\0\0\0\120\0\1\0"
 
 local function txt_answer(q, records, full_size)
     local header = answer_header(q, records)
@@ -47,9 +47,9 @@ local function txt_answer(q, records, full_size)
     -- The first records are minimal TXT RRs. The last uses the remaining
     -- space, including legal TXT character-string length octets, up to 65535.
     local body = string.rep(tiny_txt, records - 1)
-    local length = 65535 - #header - #body - 11
+    local length = 65535 - #header - #body - 12
     check(length > 0, "too many records for maximum-size response")
-    local raw = header .. body .. "\0\0\16\0\1\0\0\0\120"
+    local raw = header .. body .. "\192\12\0\16\0\1\0\0\0\120"
         .. u16(length) .. txt_data(length)
     check(#raw == 65535, "maximum-size response length")
     return raw

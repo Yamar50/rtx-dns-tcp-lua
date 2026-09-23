@@ -672,37 +672,47 @@ end
 function Relay:_client_frames(client)
   if client.rate_limited then return end
   for _ = 1, self.cfg.client_pipeline do
-    if client.jobs + #client.output >= self.cfg.client_pipeline or #client.input < 2 then return end
+    if client.jobs + #client.output >= self.cfg.client_pipeline then return end
+    if #client.input < 2 then
+      if client.read_eof then client.input = "" end
+      break
+    end
     local length = string.byte(client.input, 1) * 256 + string.byte(client.input, 2)
     if length < 12 or length > self.cfg.max_query then self:_close_client(client); return end
-    if #client.input < length + 2 then return end
+    if #client.input < length + 2 then
+      -- EOF cannot complete a truncated final frame. Discard only that tail;
+      -- complete earlier frames and their replies still drain normally.
+      if client.read_eof then client.input = "" end
+      break
+    end
     local raw = string.sub(client.input, 3, length + 2)
     client.input = string.sub(client.input, length + 3)
     self:_query(client, raw)
     if not self.clients[client.socket] then return end
-    if #client.input > 0 then client.read_deadline = self.now + self.cfg.client_read_timeout
+    if #client.input > 0 and not client.read_eof then client.read_deadline = self.now + self.cfg.client_read_timeout
     else client.read_deadline = nil end
+  end
+  if client.read_eof and #client.input == 0 and client.jobs == 0 and #client.output == 0 then
+    self:_close_client(client)
   end
 end
 
 function Relay:_client_read(client)
   local raw, err, partial = call(client.socket, "receive", self.cfg.max_query + 2)
   raw = raw or partial or ""
+  -- An orderly read-half-close still permits replies. Buffered complete frames
+  -- may be waiting for a pipeline slot, so EOF is not a framing error.
+  if err == "closed" then client.read_eof, client.read_deadline = true, nil end
   if #raw > 0 then
-    if #client.input == 0 and not client.read_deadline then
+    if #client.input == 0 and not client.read_deadline and not client.read_eof then
       client.read_deadline = self.now + self.cfg.client_read_timeout
     end
     client.input = client.input .. raw
     client.last_activity = self.now
     if #client.input > (self.cfg.max_query + 2) * 2 then self:_close_client(client); return end
-    self:_client_frames(client)
   end
-  if err and not waiting(err) then
-    if err == "closed" and #client.input == 0 then
-      client.read_eof, client.read_deadline = true, nil
-      if client.jobs == 0 and #client.output == 0 then self:_close_client(client) end
-    else self:_close_client(client) end
-  end
+  if #raw > 0 or client.read_eof then self:_client_frames(client) end
+  if err and err ~= "closed" and not waiting(err) then self:_close_client(client) end
 end
 
 function Relay:_client_write(client)
@@ -714,7 +724,9 @@ function Relay:_client_write(client)
   if err and not waiting(err) then self:_close_client(client); return end
   if item.pos > #item.data then
     table.remove(client.output, 1); self:_inc("client_responses_sent")
-    if client.read_eof and client.jobs == 0 and #client.output == 0 then self:_close_client(client) end
+    if client.read_eof and #client.input == 0 and client.jobs == 0 and #client.output == 0 then
+      self:_close_client(client)
+    end
   end
 end
 

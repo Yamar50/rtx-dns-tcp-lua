@@ -91,7 +91,7 @@ local function read_name_in(s, p, finish, known_names)
     local canon, err_or_name, next_p = name_at(s, p, known_names)
     if not canon then return nil, err_or_name end
     if next_p > finish + 1 then return nil, "name exceeds RDATA" end
-    return next_p
+    return next_p, nil, canon
 end
 
 local function char_string_end(s, p, finish)
@@ -119,9 +119,10 @@ local function validate_rdata(s, rr, known_names)
     if t == 1 and rr.rdlength ~= 4 then return nil, "invalid A length" end
     if t == 28 and rr.rdlength ~= 16 then return nil, "invalid AAAA length" end
     if single_name[t] then
-        local after, err = read_name_in(s, p, finish, known_names)
+        local after, err, target = read_name_in(s, p, finish, known_names)
         if not after then return nil, err end
         if after ~= finish + 1 then return nil, "extra name RDATA" end
+        if t == 5 then rr.cname_target = target end
     elseif t == 6 then -- SOA
         local err
         p, err = read_name_in(s, p, finish, known_names)
@@ -281,6 +282,7 @@ function M.parse_query(raw)
     if byte(raw, 3) >= 2 or byte(raw, 4) % 16 ~= 0 or byte(raw, 4) % 128 >= 64 then
         return nil, "invalid QUERY header flags"
     end
+    if q.qclass ~= 1 then return nil, "only IN-class queries are supported" end
     if q.ancount ~= 0 or q.nscount ~= 0 then return nil, "QUERY contains answer or authority records" end
     if q.qtype == 251 or q.qtype == 252 then return nil, "zone transfers are unsupported" end
     if q.signed then return nil, "TSIG and SIG(0) cannot be relayed with rewritten IDs" end
@@ -463,6 +465,45 @@ function M.error_response(query, rcode)
     return sub(raw, 1, 2) .. flags .. "\0\0\0\0\0\0\0\0"
 end
 
+local function has_positive_answer(r, q)
+    -- Index once so shuffled answers and long chains do not require repeated
+    -- section scans. Only answer records in the question class are relevant.
+    local owners = {}
+    for i = 1, r.ancount do
+        local rr = r.records[i]
+        if rr.rclass == q.qclass then
+            local owner = owners[rr.owner]
+            if not owner then owner = {}; owners[rr.owner] = owner end
+            if rr.rtype == 5 then
+                if owner.cname and owner.cname ~= rr.cname_target then owner.conflict = true end
+                owner.cname = rr.cname_target
+            else
+                owner.other = true
+            end
+            if rr.rtype == q.qtype then owner.requested = true end
+        end
+    end
+    -- A CNAME-only NOERROR reply can be NODATA (RFC 2308 section 2.2).
+    -- Follow the question's chain to an actual requested-type answer; an
+    -- unrelated RR cannot complete it. Ambiguity and loops only bypass cache.
+    local current, seen = q.canonical_name, {}
+    for _ = 1, r.ancount do
+        if seen[current] then return false end
+        seen[current] = true
+        local owner = owners[current]
+        if not owner or owner.conflict then return false end
+        if owner.cname then
+            if owner.other or owner.cname == current then return false end
+            -- A direct CNAME query asks for the alias itself, not its target.
+            if q.qtype == 5 then return true end
+            current = owner.cname
+        else
+            return owner.requested == true
+        end
+    end
+    return false
+end
+
 function M.cache_prepare(response, q)
     if not q.cacheable then return nil, "query bypasses cache" end
     local r, err = M.validate_response(response, q)
@@ -471,18 +512,9 @@ function M.cache_prepare(response, q)
         or r.ancount == 0 or not r.min_ttl or r.min_ttl == 0 then
         return nil, "response is not positive cacheable data"
     end
-    -- NOERROR with CNAME records can still be NODATA or a referral for the
-    -- final name (RFC 2308 section 2.2). Only cache a complete positive answer
-    -- for the requested type; a direct CNAME query remains eligible.
-    local requested_answer = false
-    for i = 1, r.ancount do
-        local rr = r.records[i]
-        if rr.rtype == q.qtype and rr.rclass == q.qclass then
-            requested_answer = true
-            break
-        end
+    if not has_positive_answer(r, q) then
+        return nil, "no unambiguous positive answer for the question"
     end
-    if not requested_answer then return nil, "no answer of the requested type and class" end
     if r.question_compressed or #r.question ~= #q.question then
         return nil, "cache question layout differs"
     end

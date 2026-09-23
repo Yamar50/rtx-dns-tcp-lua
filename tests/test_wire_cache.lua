@@ -24,13 +24,13 @@ local function opt(options, flags, payload)
     options = options or ""
     return "\0" .. u16(41) .. u16(payload or 1232) .. u32(flags or 0) .. u16(#options) .. options
 end
-local function query(n, id, qtype, additional, flags)
+local function query(n, id, qtype, additional, flags, qclass)
     return u16(id or 123) .. u16(flags or 256) .. u16(1) .. u16(0) .. u16(0)
         .. u16(additional and 1 or 0) .. name(n or "Example.COM")
-        .. u16(qtype or 1) .. u16(1) .. (additional or "")
+        .. u16(qtype or 1) .. u16(qclass or 1) .. (additional or "")
 end
-local function rr(rtype, ttl, rdata, owner)
-    return (owner or "\192\12") .. u16(rtype) .. u16(1) .. u32(ttl) .. u16(#rdata) .. rdata
+local function rr(rtype, ttl, rdata, owner, rclass)
+    return (owner or "\192\12") .. u16(rtype) .. u16(rclass or 1) .. u32(ttl) .. u16(#rdata) .. rdata
 end
 local function answer(q, records, additionals, flags)
     return u16(q.id) .. u16(flags or 33152) .. u16(1) .. u16(#records) .. u16(0)
@@ -45,6 +45,13 @@ end
 local function rejected_response(raw, q)
     local value, err = wire.validate_response(raw, q)
     check(value == nil and type(err) == "string", "malformed response accepted")
+end
+local function cache_bypass(raw, q)
+    check(wire.validate_response(raw, q), "cache bypass must still permit forwarding")
+    local isolated = cache.new()
+    check(not isolated:put(q, "bypass", raw, 0), "nonpositive or ambiguous answer cached")
+    equal(isolated:stats().entries, 0)
+    check(isolated:get(q, "bypass", 1) == nil)
 end
 
 local q = parsed(query())
@@ -132,6 +139,89 @@ local direct_cname = parsed(query("alias.example", 322, 5))
 check(c:put(direct_cname, "filtered", answer(direct_cname, {cname_only}), 0))
 local complete_alias = answer(qempty, {cname_only, rr(28, 30, string.rep("\0", 15) .. "\1", name("empty.example"))})
 check(c:put(qempty, "filtered", complete_alias, 0))
+
+-- The requested type must belong to QNAME or its completed CNAME chain.
+-- An unrelated answer must not turn CNAME NODATA into a cached positive.
+local qvictim = parsed(query("victim.example", 323))
+local alias_empty = rr(5, 3600, name("empty.example"))
+local unrelated_a = rr(1, 3600, char(192, 0, 2, 66), name("unrelated.example"))
+local long_soa = rr(6, 3600, soa_data, name("example"))
+local unrelated_nodata = u16(qvictim.id) .. u16(33152) .. u16(1) .. u16(2) .. u16(1)
+    .. u16(0) .. qvictim.question .. alias_empty .. unrelated_a .. long_soa
+cache_bypass(unrelated_nodata, qvictim)
+cache_bypass(answer(qvictim, {unrelated_a}), qvictim)
+cache_bypass(answer(qvictim, {alias_empty, unrelated_a}), qvictim)
+cache_bypass(answer(qvictim, {alias_empty}, {
+    rr(1, 60, "1234", name("empty.example")),
+}), qvictim) -- Additional data cannot complete an answer chain.
+cache_bypass(answer(qvictim, {
+    alias_empty, rr(1, 60, "1234", name("empty.example"), 3),
+}), qvictim)
+cache_bypass(answer(qvictim, {
+    rr(5, 60, name("empty.example"), nil, 3),
+    rr(1, 60, "1234", name("empty.example")),
+}), qvictim)
+
+-- Shuffling the answer section, using compressed target suffixes, and case
+-- changes do not alter reachability. Identical CNAME duplicates are harmless.
+local middle_name, final_name = name("middle.example"), name("final.example")
+local shuffled = answer(qvictim, {
+    rr(1, 60, "1234", final_name),
+    rr(5, 60, name("FINAL.example"), middle_name),
+    rr(5, 60, name("MIDDLE.EXAMPLE")),
+    rr(5, 60, middle_name),
+})
+check(c:put(qvictim, "shuffled", shuffled, 0))
+check(wire.validate_response(check(c:get(qvictim, "shuffled", 59)), qvictim))
+-- victim.example's example suffix begins at wire offset 19.
+local compressed = answer(qvictim, {
+    rr(5, 60, "\5empty\192\19"),
+    rr(1, 60, "1234", name("EMPTY.example")),
+})
+check(c:put(qvictim, "compressed", compressed, 0))
+check(wire.validate_response(check(c:get(qvictim, "compressed", 59)), qvictim))
+-- A target may also be an entire prior owner name, with the target RR first.
+local prior_target = answer(qvictim, {
+    rr(1, 60, "1234", final_name),
+    rr(5, 60, u16(49152 + 12 + #qvictim.question)),
+})
+check(c:put(qvictim, "prior-target", prior_target, 0))
+
+-- Conflicting aliases, CNAME/data coexistence, loops, and unfinished chains
+-- stay forwardable, but none establishes an unambiguous positive cache entry.
+for _, records in ipairs({
+    {alias_empty, rr(5, 60, final_name), rr(1, 60, "1234", final_name)},
+    {rr(5, 60, final_name), rr(1, 60, "1234"), rr(1, 60, "1234", final_name)},
+    {rr(5, 60, middle_name), rr(5, 60, final_name, middle_name),
+        rr(16, 60, "\1x", middle_name), rr(1, 60, "1234", final_name)},
+    {rr(5, 60, qvictim.canonical_name), unrelated_a},
+    {rr(5, 60, middle_name), rr(5, 60, qvictim.canonical_name, middle_name), unrelated_a},
+    {rr(5, 60, middle_name), rr(5, 60, final_name, middle_name), unrelated_a},
+}) do
+    cache_bypass(answer(qvictim, records), qvictim)
+end
+cache_bypass(answer(direct_cname, {
+    rr(5, 60, middle_name), rr(5, 60, final_name),
+}), direct_cname)
+cache_bypass(answer(direct_cname, {rr(5, 60, final_name, middle_name)}), direct_cname)
+cache_bypass(answer(direct_cname, {rr(5, 60, direct_cname.canonical_name)}), direct_cname)
+cache_bypass(answer(direct_cname, {rr(5, 60, final_name), rr(1, 60, "1234")}), direct_cname)
+local direct_any = parsed(query("victim.example", 324, 255))
+check(not direct_any.cacheable)
+cache_bypass(answer(direct_any, {rr(1, 60, "1234")}), direct_any)
+
+-- A long reversed chain exercises indexed lookup rather than answer-order
+-- dependence or repeated whole-section scans. The record count bounds walks.
+local qdeep = parsed(query("hop0.example", 325))
+local reverse_chain = {rr(1, 60, "1234", name("hop512.example"))}
+for i = 511, 0, -1 do
+    reverse_chain[#reverse_chain + 1] = rr(5, 60, name("hop" .. (i + 1) .. ".example"),
+        name("hop" .. i .. ".example"))
+end
+check(c:put(qdeep, "deep", answer(qdeep, reverse_chain), 0))
+check(wire.validate_response(check(c:get(qdeep, "deep", 59)), qdeep))
+reverse_chain[1] = rr(5, 60, name("hop0.example"), name("hop512.example"))
+cache_bypass(answer(qdeep, reverse_chain), qdeep)
 
 -- Maximum-length names remain valid when the response owner is compressed.
 -- Count pointer hops separately from the up-to-127 ordinary labels.
@@ -236,7 +326,7 @@ check(wire.frame(big .. "x") == nil)
 -- Many small records stress TTL metadata rather than payload size. Check the
 -- first, middle and last TTL and the exact saved-byte limit independently of
 -- the single large TXT test above. Unknown RDATA stays byte-for-byte opaque.
-local qpacked = parsed(query("packed.example", 65000, 16))
+local qpacked = parsed(query(".", 65000, 16))
 local packed_record = rr(16, 120, "\0", "\0")
 local packed_room = 65535 - 12 - #qpacked.question
 local packed_count = (packed_room - packed_room % #packed_record) / #packed_record
@@ -299,10 +389,19 @@ local no_recursion = parsed(query("opaque.example", 4321, 65280, nil, 0))
 check(c:get(no_recursion, "opaque", 110) == nil, "RD variants must not share cache entries")
 local wrong_type = parsed(query("opaque.example", 4321, 1))
 rejected_response(opaque_response, wrong_type)
-local wrong_class_raw = qunknown.raw:sub(1, -3) .. u16(3)
-local wrong_class = parsed(wrong_class_raw)
-rejected_response(opaque_response, wrong_class)
-check(not wrong_class.cacheable)
+-- The relay supports only IN questions. Other classes must fail parsing and
+-- yield FORMERR through the same error-response path as other bad queries.
+for _, qclass in ipairs({0, 2, 3, 4, 254, 255, 256, 65535}) do
+    local wrong_class_raw = query("opaque.example", 4321, 65280, nil, nil, qclass)
+    rejected_query(wrong_class_raw)
+    local formerr = check(wire.error_response(wrong_class_raw, 1))
+    equal(wire.u16(formerr, 1), 4321)
+    equal(formerr:byte(4) % 16, 1)
+    equal(wire.u16(formerr, 5), 0)
+end
+local wrong_class_response = opaque_response:sub(1, qunknown.question_end - 2)
+    .. u16(3) .. opaque_response:sub(qunknown.question_end + 1)
+rejected_response(wrong_class_response, qunknown)
 
 -- Bounded malformed packet handling: missing sections, bad compression,
 -- oversized names, malformed RDATA/options, mismatched questions and IDs.
