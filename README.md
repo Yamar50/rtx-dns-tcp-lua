@@ -34,7 +34,7 @@ sequenceDiagram
     Note over Client,Lua: 大きなDNS応答を取得できる
 ```
 
-UDPからTCPへの切り替えはクライアントが行い、そのTCP問い合わせをLuaが受け付けます。上流DNSはYAMAHA RTXの設定から選びます。
+UDPからTCPへの切り替えはクライアントが行い、そのTCP問い合わせをLuaが受け付けます。
 
 ## このスクリプトがないと…
 
