@@ -2,7 +2,7 @@
 
 # YAMAHAのRTXルーターのDNSにTCPフォールバックを追加
 
-> このブランチには、NVR510の`onu1`対応を試すための変更を含みます。NVR510 Rev.15.01.26で協力者自身による修正版の動作報告があります。このブランチの配布ファイルでの実機確認結果は報告待ちです。[NVR510試験版のダウンロードと手順](https://github.com/Yamar50/rtx-dns-tcp-lua/releases/tag/v0.1.4-nvr.1)を参照してください。安定版は引き続きv0.1.4です。
+> **v0.9.9候補版の公開を保留しています。** 最大長応答の負荷試験で、YAMAHA RTX830に`Data Abort(4)`による自己再起動が発生しました。原因と新旧版の差分との関係は未確定です。現在の安定版はv0.1.4です。[負荷試験記録](docs/load-test-v0.9.9.md)・[v0.9.9の変更内容](docs/releases/v0.9.9.md)・[対応機種の管理表](docs/compatibility.md)
 
 **YAMAHA RTXをDNSサーバーとして使ったまま、UDPでは収まらない大きなDNS応答も受け取れるようにするLuaスクリプトです。** クライアント側のDNSサーバー設定を変えずに使えます。
 
@@ -56,6 +56,17 @@ sequenceDiagram
 ```
 
 通常のUDP問い合わせは、スクリプトの有無にかかわらず内蔵DNSが処理します。YAMAHA RTXに登録した簡易DNSのレコードも引き続き利用できます。TCPで問い合わせ直す動作は[RFC 7766](https://www.rfc-editor.org/rfc/rfc7766.html#section-4)に、内蔵DNSのTCP未対応は[ヤマハ公式FAQ](https://www.rtpro.yamaha.co.jp/RT/FAQ/TCPIP/dns-recursive-server.html)に説明があります。
+
+## v0.9.9の主な変更点
+
+- **YAMAHA NVRのONUやタグVLANなどの設定に対応**：インターフェース名の判定を共通化し、未対応のDNS取得元があっても、無関係な規則の問い合わせを継続します。
+- **IPv6とIPv4でDNSの経路が異なる環境に対応**：一致した規則のDNSがIPv6のみの場合は、条件に合う後続のselect規則、次に通常DNSのIPv4を使います。DNS取得状態が不明な規則や明示拒否は迂回しません。
+- **機種ごとのAPI差と異常時の処理を整理**：必要なAPIを確認し、初期化失敗時のソケット解放、ログ失敗の隔離、待機できない場合の停止を追加しました。
+- **内蔵DNSへのUDP問い合わせを公式APIの受信上限に合わせる**：受信上限とEDNSの広告サイズを2,048バイトにそろえます。内蔵DNSから完全な回答を得られない場合はSERVFAILを返します。外部上流のTCP応答は引き続き最大65,535バイトです。
+
+v0.9.9候補版はYAMAHA RTX830・YAMAHA RTX1210で、各32項目の機能回帰、各7スイート・2,738チェックのネイティブLuaによる解析試験、実際のconfigから自動設定した各8件のTCP名前解決に成功しました。これらの機能確認と、再起動が発生した負荷試験は分けて記録しています。[検証結果](docs/validation.md#v099-validation)
+
+v0.9.9はv1.0.0に向けた確認用の版です。再起動の原因の切り分けと必要な修正・再検証を行い、公開とv1.0.0への移行を判断します。[変更内容と検証結果](docs/releases/v0.9.9.md)・[DNS選択の技術仕様](docs/dns-ipv6-fallback.md)
 
 ## v0.1.4の主な修正点
 
@@ -115,7 +126,7 @@ save
 | 512バイト | 250クエリ/秒、7,500 / 7,500件成功 | 100クエリ/秒、3,000 / 3,000件成功 |
 | 65,535バイト | 40クエリ/秒、1,200 / 1,200件成功 | 40クエリ/秒、1,200 / 1,200件成功 |
 
-64個の送信元IPを使い、配布版のIP当たり4接続・20クエリ/秒・バースト40件、全体32接続などの制限は維持しました。上流へのTCP接続は再利用しています。機種共通の最大性能や長時間の保証値ではなく、v0.1.3で全件成功した試験条件です。v0.1.4では機能回帰試験を行い、この負荷条件は再測定していません。
+64個の送信元IPを使い、配布版のIP当たり4接続・20クエリ/秒・バースト40件、全体32接続などの制限は維持しました。上流へのTCP接続は再利用しています。機種共通の最大性能や長時間の保証値ではなく、v0.1.3で全件成功した試験条件です。v0.1.4では機能回帰試験を行い、この負荷条件は再測定していません。v0.9.9候補版は別条件の負荷試験でRTX830の自己再起動が発生し、公開保留中です。[v0.9.9の負荷試験記録](docs/load-test-v0.9.9.md)。上記の過去版の測定値をv0.9.9の性能として扱いません。
 
 v0.1.3では同程度のサイズでもレコード数の多い応答が送信前に失敗しました。v0.1.4では、この問題を修正し、4,000件のAレコード・64,067バイトの応答を両機種で単発5件ずつ正常受信しました。[v0.1.4の検証結果](docs/validation.md#v014-validation)
 
@@ -149,9 +160,11 @@ v0.1.3では同程度のサイズでもレコード数の多い応答が送信�
 ビルドはPython 3の標準ライブラリだけを使用します。ローカルの単体テストにはLuaも必要です。生成物は1本のLuaファイルで、YAMAHA RTXへの追加ライブラリのインストールは不要です。
 
 ```sh
+lua tests/test_interfaces.lua
 lua tests/test_wire_cache.lua
 lua tests/test_dns_policy.lua
 lua tests/test_dynamic_policy.lua
+lua tests/test_ipv6_fallback.lua
 lua tests/test_dns_runtime.lua
 lua tests/test_aaaa_filter.lua
 lua tests/test_auto_config.lua
@@ -176,7 +189,9 @@ python3 tools/build.py --config config/release.lua --output build/release/rtx-dn
 
 設定全体をログへ出力せず、ルーターのconfigを変更しません。
 
-`dns server select`を小さい番号から評価し、最初に一致した規則を使います。固定IP、PP取得、DHCP取得、rejectに対応し、選択した上流が失敗しても後続規則へ切り替えません。通常のDNS設定は固定の`dns server`、`dns server pp`、`dns server dhcp`の順に選びます。元クライアントの送信元IPv4、問い合わせタイプ、PTRのIPv4/プレフィックス、`restrict pp`、`edns=on/off`を扱います。EDNS省略時はヤマハの既定どおりoffです。
+`dns server select`を小さい番号から評価します。固定IP、PP取得、DHCP取得、rejectに対応し、元クライアントの送信元IPv4、問い合わせタイプ、PTRのIPv4/プレフィックス、`restrict pp`、`edns=on/off`を扱います。EDNS省略時はヤマハの既定どおりoffです。**一致した規則がIPv6のみで利用できない場合に限り、条件に合う後続select、次に通常DNSのIPv4を使います。** 選んだIPv4 DNSへの接続失敗・タイムアウトでは、後続規則へ選び直しません。
+
+通常DNSの優先順位は、固定の`dns server`、`dns server pp`、NVRの`dns server pdp`、`dns server dhcp`です。PDPからのDNS取得は未対応であり、PDPが通常DNSとして選ばれる問い合わせはSERVFAILにします。優先する固定DNSやPPがある場合はそちらを使い、未対応PDPを理由に下位DHCPへ送りません。[選択仕様](docs/dns-policy.md)
 
 PP・DHCPの状態は起動時と30秒ごとに確認します。接続先や選択状態が変わった場合は、古い接続とキャッシュを破棄し、処理中の問い合わせにはSERVFAILを返します。これは取得済みDNSの更新であり、config変更の自動再読込ではありません。
 
@@ -184,11 +199,13 @@ PP・DHCPの状態は起動時と30秒ごとに確認します。接続先や選
 
 `edns=off`では上流向けのOPT（DOやオプションを含む）を除去します。DNSSEC関連・特別なEDNS要求をキャッシュしない方針は維持します。`edns=on`では既存OPTを保持し、OPTのない要求には空OPTを追加します。これにより、以前の固定設定の透明中継と応答内容が変わる場合があります。
 
-`select ... reject`はPTRも含め、該当する問い合わせを破棄します。IPv6だけの上流、NAT46など転送できない規則は、該当する問い合わせにSERVFAILを返します。未対応構文を無条件に読み飛ばしません。条件を解釈できない規則では、その番号で該当する可能性がある問い合わせを止めます。重複規則番号・入力上限超過・不明なアクセス許可などは起動エラーになります。最大256規則・異なる上流宛先16個までです。
+`select ... reject`はPTRも含め、該当する問い合わせを破棄します。NAT46などの未対応規則、判定不能な取得元・条件は、該当する問い合わせにSERVFAILを返します。IPv6のみの規則から後続へ進んでも利用可能な宛先がなければSERVFAILです。未対応構文を無条件に読み飛ばしません。条件を解釈できない規則では、その番号で該当する可能性がある問い合わせを止めます。重複規則番号・入力上限超過・不明なアクセス許可などは起動エラーになります。最大256規則・異なる上流宛先16個までです。
 
 `dns service aaaa filter on`では、外部へのAAAA問い合わせの応答からAAAAと対応するRRSIGを除去し、CNAMEなどを保持します。加工した応答のADは解除し、キャッシュには保存しません。登録済みの簡易DNS名は従来どおり内蔵UDP DNSへ渡し、内蔵側のフィルターに従います。
 
-配布版はYAMAHA RTXの静的登録名を起動時に読み取り、その名前への問い合わせを内蔵UDP DNSに渡します。親ドメインや子孫の名前までローカル扱いにはしません。ホスト名とIPの対応をLuaに複製して応答する処理は行いません。
+インターフェースは`lanN`・`lanN/M`・`lanN.M`・`vlanN`・`wan1`・`onu1`・`bridge1`を用途別に分類し、PPは`pp N`の専用構文で扱います。`dns host lan`にWAN・ONUを含めません。`lanN.M`はアドレスの読取りとLAN一括指定では扱いますが、未確認の直接指定`dns host lanN.M`や`dns server dhcp lanN.M`は使用しません。[用途ごとの対応表](docs/compatibility.md#interface-forms)
+
+配布版はYAMAHA RTXの静的登録名を起動時に読み取り、その名前への問い合わせを内蔵UDP DNSに渡します。親ドメインや子孫の名前までローカル扱いにはしません。ホスト名とIPの対応をLuaに複製して応答する処理は行いません。内蔵DNSへのUDP受信上限は2,048バイトです。EDNSがある要求は2,048を超える広告サイズだけ縮小し、DO/CDやその他の情報を保持します。不完全な応答やTCP再問い合わせ要求（TC=1）ではSERVFAILを返し、登録名を外部DNSへ転送しません。
 
 開発・検証のために手動設定を使う場合の手順は、[開発・検証用の手動設定と一時実行](docs/development.md)にまとめています。通常の導入には不要です。
 
@@ -218,7 +235,7 @@ PP・DHCPの状態は起動時と30秒ごとに確認します。接続先や選
 
 ## 参照資料
 
-- [IPv6のみの上流DNSが選ばれた場合のIPv4 DNSへの切替方針（確定した次期仕様・未実装）](docs/dns-ipv6-fallback.md)
+- [IPv6のみの上流DNSが選ばれた場合のIPv4 DNSへの切替仕様](docs/dns-ipv6-fallback.md)
 - [Yamaha Lua機能](https://www.rtpro.yamaha.co.jp/RT/docs/lua/)
 - [dns service](https://www.rtpro.yamaha.co.jp/RT/manual/rt-common/dns/dns_service.html)
 - [dns server select](https://www.rtpro.yamaha.co.jp/RT/manual/rt-common/dns/dns_server_select.html)

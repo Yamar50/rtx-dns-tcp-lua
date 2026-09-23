@@ -2,13 +2,15 @@
 
 ソースコード・テスト・ドキュメントはすべてOpenAI Codexで生成した。
 
+> このブランチの説明はv0.9.9候補版を対象にしています。候補版は負荷試験中の再起動を調査しており、公開保留中です。現在配布している安定版v0.1.4の導入には、[その版の手順](https://github.com/Yamar50/rtx-dns-tcp-lua/blob/v0.1.4/docs/install.md)を参照してください。
+
 ## ビルド済みファイル
 
-GitHubの[Releases](https://github.com/Yamar50/rtx-dns-tcp-lua/releases)から`rtx-dns.lua`をダウンロードします。1本のLuaファイルに必要な本体と自動設定処理を含み、追加ライブラリ・Python・手編集は不要です。利用するネットワークの情報をビルド時に埋め込んでいません。
+公開後はGitHubの[Releases](https://github.com/Yamar50/rtx-dns-tcp-lua/releases)から対象版の`rtx-dns.lua`をダウンロードします。1本のLuaファイルに必要な本体と自動設定処理を含み、追加ライブラリ・Python・手編集は不要です。利用するネットワークの情報をビルド時に埋め込んでいません。
 
 配布版は起動時にRTXのconfigを読み、TCP/53で待ち受けます。
 
-- 上流DNS：`dns server select`を番号順で評価し、未一致時は固定の`dns server`、`dns server pp`、`dns server dhcp`の優先順で選択。PP未取得を理由に通常のDHCP設定へ切り替えることはありません。
+- 上流DNS：`dns server select`を番号順で評価。v0.9.9ではIPv6のみで利用できない規則を除外し、条件に合う後続select、次に通常DNSのIPv4を使います。通常DNSは固定の`dns server`、`dns server pp`、NVRの`dns server pdp`、`dns server dhcp`の優先順です。PDP取得は未対応で、PP未取得やPDP未対応を理由に下位DHCPへ切り替えません。
 - アクセス許可：`dns host`の単一IP・IP範囲・対応インターフェースのネットワークを使用。`any`または省略時はRTXの既定値どおり全ホストを許可。`none`なら起動しません。
 - ローカル名：`ip host`・`dns static`に登録された名前を内蔵UDP DNSへ問い合わせる。個別の`local_zones`設定は不要。
 - キャッシュ：256件。実行時間の制限なし。統計は60秒間隔でsyslogへ出力。
@@ -21,6 +23,8 @@ GitHubの[Releases](https://github.com/Yamar50/rtx-dns-tcp-lua/releases)から`r
 `dns host lan1`では、LAN1のプライマリー・セカンダリーIPv4アドレスとマスクから許可範囲を作り、接続元IPを照合します。LAN1経由で到達しただけでは、範囲外の別セグメントは許可されません。別のLANも許可する場合は、RTXの`dns host`に対象インターフェースやIP範囲を併記します。例えばLAN1とLAN2なら`dns host lan1 lan2`です。実際の構成に合わせて設定し、変更後にスクリプトを再起動してください。
 
 待受はIPv4の全アドレスのTCP/53です。RTXのLua APIの`tcp:bind()`が指定するのはIPアドレスで、インターフェース名を指定する機能はありません。待受IPと利用端末の許可は別に扱い、許可されない接続元は問い合わせを処理せず切断します。既存のIPフィルターも適用されます。
+
+`dns host lan`にはLAN・タグVLAN・LAN分割・VLAN・bridgeを含み、WAN・ONUは含めません。直接の`dns host lanN.M`は未確認構文のため起動を中止します。[インターフェース名と用途](compatibility.md#interface-forms)を参照してください。
 
 現在の自動設定はconfigに記述された静的IPv4アドレスを対象とします。許可範囲に必要なインターフェースがDHCPなどで動的にアドレスを取得する構成では、範囲を推測せず起動を中止します。
 
