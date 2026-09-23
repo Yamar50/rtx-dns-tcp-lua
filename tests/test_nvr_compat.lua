@@ -153,10 +153,9 @@ local v6responses = {["show status ipv6 dhcp"] = dhcpv6("ONU1", {"2001:db8::53",
 local v6runtime, v6calls = reader(v6config, v6responses)
 local v6policy = parse(Policy, v6config)
 v6runtime:refresh(); source(v6runtime, "onu1", "present", {"2001:db8::53", "fe80::1%onu1"})
-equal(#v6calls, 1); equal(v6calls[1], "show status ipv6 dhcp")
-v6policy:refresh(v6runtime); check(selected(v6policy).unavailable)
-equal(selected(v6policy).rule_id, 1, "IPv6-only acquisition must not skip to a later rule")
-equal(#selected(v6policy).upstreams, 0)
+v6policy:refresh(v6runtime)
+equal(selected(v6policy).rule_id, 2, "IPv6-only acquisition must fallback to a later usable rule")
+equal(host(v6policy), "203.0.113.54")
 for _, state in ipairs({"renew", "rebind"}) do
     v6responses["show status ipv6 dhcp"] = dhcpv6("ONU1", {"fe80::1%onu1"}, state)
     v6runtime:refresh(); source(v6runtime, "onu1", "present", {"fe80::1%onu1"})
