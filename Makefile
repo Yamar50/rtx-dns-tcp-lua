@@ -1,7 +1,7 @@
 LUA ?= lua
 PYTHON ?= python3
 
-.PHONY: test build release
+.PHONY: test build release nvr-test
 test:
 	$(LUA) tests/test_wire_cache.lua
 	$(LUA) tests/test_dns_policy.lua
@@ -9,6 +9,7 @@ test:
 	$(LUA) tests/test_dns_runtime.lua
 	$(LUA) tests/test_aaaa_filter.lua
 	$(LUA) tests/test_auto_config.lua
+	$(LUA) tests/test_nvr_compat.lua
 	$(LUA) tests/test_policy_wire.lua
 	$(LUA) tests/test_main.lua
 	$(LUA) tests/test_relay.lua
@@ -21,3 +22,6 @@ build:
 
 release:
 	$(PYTHON) tools/build.py --config config/release.lua --output build/release/rtx-dns.lua
+
+nvr-test:
+	$(PYTHON) tools/build.py --config config/nvr-test.lua --output build/nvr-test/nvr-dns.lua

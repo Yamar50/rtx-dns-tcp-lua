@@ -2,6 +2,8 @@
 
 # YAMAHAのRTXルーターのDNSにTCPフォールバックを追加
 
+> このブランチには、NVR510の`onu1`対応を試すための変更を含みます。NVR510実機では未検証です。[NVR510試験版のダウンロードと手順](https://github.com/Yamar50/rtx-dns-tcp-lua/releases/tag/v0.1.4-nvr.1)を参照してください。安定版は引き続きv0.1.4です。
+
 **YAMAHA RTXをDNSサーバーとして使ったまま、UDPでは収まらない大きなDNS応答も受け取れるようにするLuaスクリプトです。** クライアント側のDNSサーバー設定を変えずに使えます。
 
 - **TCPフォールバックに対応**：クライアントがUDPからTCPへ切り替えた問い合わせを、同じYAMAHA RTXのIPアドレスで受け付けます。[ヤマハ公式FAQで説明されている内蔵DNSのTCP未対応](https://www.rtpro.yamaha.co.jp/RT/FAQ/TCPIP/dns-recursive-server.html)を補います。
@@ -153,6 +155,7 @@ lua tests/test_dynamic_policy.lua
 lua tests/test_dns_runtime.lua
 lua tests/test_aaaa_filter.lua
 lua tests/test_auto_config.lua
+lua tests/test_nvr_compat.lua
 lua tests/test_policy_wire.lua
 lua tests/test_main.lua
 lua tests/test_relay.lua

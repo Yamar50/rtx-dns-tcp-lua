@@ -26,7 +26,8 @@ local function interface(id)
     if type(id) ~= "string" or #id > 64 then return nil end
     id = id:lower()
     if id:match("^lan%d+$") or id:match("^lan%d+[/.]%d+$")
-        or id:match("^vlan%d+$") or id:match("^wan%d+$") or id:match("^bridge%d+$") then return id end
+        or id:match("^vlan%d+$") or id:match("^wan%d+$") or id:match("^bridge%d+$")
+        or id == "onu1" then return id end
 end
 local function ipv4(s)
     if type(s) ~= "string" then return nil end

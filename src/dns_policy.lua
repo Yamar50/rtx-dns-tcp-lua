@@ -158,6 +158,7 @@ local function ip_literal(value)
         zone = string.lower(zone)
         if not (zone:match("^lan%d+$") or zone:match("^lan%d+[/.]%d+$")
             or zone:match("^vlan%d+$") or zone:match("^wan%d+$") or zone:match("^bridge%d+$")
+            or zone == "onu1"
             or decimal(zone, 2147483647)) then return nil end
     end
     if text:find(".", 1, true) then
@@ -192,7 +193,7 @@ end
 
 local function interface(value)
     return type(value) == "string" and (value:match("^lan%d+$")
-        or value:match("^wan%d*$") or value:match("^bridge%d+$")) and value or nil
+        or value:match("^wan%d*$") or value:match("^bridge%d+$") or value == "onu1") and value or nil
 end
 
 local function options(words, p, descriptor)
@@ -522,6 +523,7 @@ function Policy:select(query, client_address)
     local text, err = query_text(query)
     if not text then return nil, err end
     local reverse = query.qtype == 12 and ptr_address(text) or nil
+    local first_unavailable = nil
     for _, rule in ipairs(self.rules) do
         if (not rule.qtype or rule.qtype == 0 or rule.qtype == query.qtype)
             and address_matches(sender, rule.source) and rule.route.restrict_state ~= "down" then
@@ -530,9 +532,17 @@ function Policy:select(query, client_address)
                 if rule.qtype == 12 then matched = reverse and address_matches(reverse, rule.matcher)
                 else matched = text_matches(text, rule.matcher) end
             end
-            if matched then return rule.route end
+            if matched then
+                if rule.route.reject or not rule.route.unavailable then
+                    return rule.route
+                end
+                if not first_unavailable then
+                    first_unavailable = rule.route
+                end
+            end
         end
     end
+    if first_unavailable then return first_unavailable end
     if not self.fallback then return nil, "no matching DNS route or fallback" end
     return self.fallback
 end
