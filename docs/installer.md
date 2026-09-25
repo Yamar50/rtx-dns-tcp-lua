@@ -25,7 +25,7 @@ YAMAHAルーターの**管理者コンソール**で、選んだ版の1行だけ
 
 <!-- INSTALLER_COMMAND_V014_START -->
 ```text
-lua -e 'local DNSINSTALL_BOOT="yes";local r=rt.httprequest({url="https://raw.githubusercontent.com/Yamar50/rtx-dns-tcp-lua/343d1715e8527e6b1c06d4a46fd7eb59defb3f5d/installer/versions/v0.1.4/rtx-dns-install.lua",method="GET",timeout=30});assert(r.rtn1 and r.code==200 and type(r.body)=="string" and #r.body==25126,"Installer download failed");assert(loadstring(r.body))(DNSINSTALL_BOOT,"v0.1.4")'
+lua -e 'local DNSINSTALL_BOOT="yes";local r=rt.httprequest({url="https://raw.githubusercontent.com/Yamar50/rtx-dns-tcp-lua/b41c53a920ad1d71401c6a52cedce18afb825da8/installer/versions/v0.1.4/rtx-dns-install.lua",method="GET",timeout=30});assert(r.rtn1 and r.code==200 and type(r.body)=="string" and #r.body==25320,"Installer download failed");assert(loadstring(r.body))(DNSINSTALL_BOOT,"v0.1.4")'
 ```
 <!-- INSTALLER_COMMAND_V014_END -->
 
@@ -35,7 +35,7 @@ lua -e 'local DNSINSTALL_BOOT="yes";local r=rt.httprequest({url="https://raw.git
 
 <!-- INSTALLER_COMMAND_V099_START -->
 ```text
-lua -e 'local DNSINSTALL_BOOT="yes";local r=rt.httprequest({url="https://raw.githubusercontent.com/Yamar50/rtx-dns-tcp-lua/343d1715e8527e6b1c06d4a46fd7eb59defb3f5d/installer/versions/v0.9.9/rtx-dns-install.lua",method="GET",timeout=30});assert(r.rtn1 and r.code==200 and type(r.body)=="string" and #r.body==25126,"Installer download failed");assert(loadstring(r.body))(DNSINSTALL_BOOT,"v0.9.9")'
+lua -e 'local DNSINSTALL_BOOT="yes";local r=rt.httprequest({url="https://raw.githubusercontent.com/Yamar50/rtx-dns-tcp-lua/b41c53a920ad1d71401c6a52cedce18afb825da8/installer/versions/v0.9.9/rtx-dns-install.lua",method="GET",timeout=30});assert(r.rtn1 and r.code==200 and type(r.body)=="string" and #r.body==25320,"Installer download failed");assert(loadstring(r.body))(DNSINSTALL_BOOT,"v0.9.9")'
 ```
 <!-- INSTALLER_COMMAND_V099_END -->
 
@@ -51,7 +51,7 @@ DNSINSTALL (9/9) Press ENTER to display the router command prompt.
 
 ログの`(1/9)`～`(9/9)`は、下の「自動で行う処理」に対応する工程番号です。所要時間の割合ではなく、SHA256計算中の進捗にも、その工程の`(3/9)`を付けます。`no`を指定した場合も、自動起動設定を維持する工程として`(8/9)`を表示します。
 
-`lua`コマンドは処理中でもコンソールのプロンプトを返し、その後にログが表示されるため、上の完了表示を待ってください。`(9/9)`だけでは完了とは限らず、`Installation complete`まで表示されたことを確認してください。完了後はインストーラーがEnter入力を待っているわけではありません。同じコマンドを重ねて実行する必要はありません。
+`lua`コマンドは処理中でもコンソールのプロンプトを返します。表示が混ざりにくいよう、インストーラーは最初の進捗表示前に1秒待機して改行します。プロンプトが表示されても処理は続いているため、上の完了表示を待ってください。`(9/9)`だけでは完了とは限らず、`Installation complete`まで表示されたことを確認してください。完了後はインストーラーがEnter入力を待っているわけではありません。同じコマンドを重ねて実行する必要はありません。
 
 既存の`/lua/rtx-dns.lua`と内容が同じなら、本体ファイルの上書きは省略します。ディスク上のファイルと稼働中の版が異なる場合もあるため、対象タスクは停止・再起動し、確認したファイルと現在のDNS設定を読み込みます。設定変更だけなら、ダウンロードを伴わない通常の[スクリプト再起動手順](install.md#update-script)も使用できます。
 
@@ -93,7 +93,7 @@ Releaseの配布先では署名付きの長いURLが使われます。RTX1210の
 
 HTTPS対応のファームウェアとGitHubへ到達できるDNS・通信設定が必要です。HTTPSが利用できない環境では、インストーラーを使わずに[本体をUSBメモリ等で転送する手順](install.md)を使用してください。
 
-短縮したメモリ実行コマンドは、RTX1210 Rev.14.01.42でv0.1.4の導入、9段階の表示、DNS応答、設定の維持を確認しました。[短縮コマンドの試験結果](results/short-bootstrap-2026-09-25.md)を参照してください。
+短縮したメモリ実行コマンドは、RTX1210 Rev.14.01.42でv0.1.4の導入、9段階の表示、DNS応答、設定の維持を確認しました。表示修正後のv0.9.9も、試験用LANからインストーラーを読み込んで同じ項目を確認しました。[短縮コマンドの試験結果](results/short-bootstrap-2026-09-25.md)を参照してください。
 
 インストーラーをファイルへ保存する方式では、RTX1210 Rev.14.01.42でv0.1.4・v0.9.9の導入、DNS応答、不正な本体の拒否を確認しました。[試験項目と結果](results/versioned-installer-2026-09-25.md)を参照してください。従来の最新版選択方式の実機結果は[過去の検証記録](results/installer-2026-09-25.md)として残しています。
 
