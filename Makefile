@@ -1,11 +1,12 @@
 LUA ?= lua
 PYTHON ?= python3
 
-.PHONY: test build release nvr-test installer
+.PHONY: test build release nvr-test installer uninstaller
 test:
 	$(LUA) tests/test_installer_sha256.lua
 	$(LUA) tests/test_installer_http.lua
 	$(LUA) tests/test_installer.lua
+	$(LUA) tests/test_uninstaller.lua
 	$(LUA) tests/test_interfaces.lua
 	$(LUA) tests/test_wire_cache.lua
 	$(LUA) tests/test_dns_policy.lua
@@ -33,3 +34,6 @@ nvr-test:
 
 installer:
 	$(PYTHON) tools/build_installer.py --version "$(VERSION)" --payload-ref "$(PAYLOAD_REF)"
+
+uninstaller:
+	$(PYTHON) tools/build_uninstaller.py
