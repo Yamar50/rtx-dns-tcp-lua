@@ -354,7 +354,12 @@ function M.run(rt, mode, env, release)
     env = env or {}
     local fs, system = env.io or io, env.os or os
     local compile, say = env.compile or loadstring or load, env.print or print
-    local function log(s) say("DNSINSTALL " .. s) end
+    local step = 1
+    local function log(s) say("DNSINSTALL (" .. step .. "/9) " .. s) end
+    local function progress(number, message)
+        step = number
+        log(message)
+    end
     local function command(cmd)
         local ok, output = rt.command(cmd, "off")
         assert(ok and (output == nil or type(output) == "string"), "router command failed: " .. cmd)
@@ -400,6 +405,7 @@ function M.run(rt, mode, env, release)
     local old, was_running, changed, added_schedule
     local complete, save_attempted, prepared = false, false, false
     local ok, err = pcall(function()
+        progress(1, "Checking installation settings and router status")
         assert(mode == "yes" or mode == "no", "usage: lua " .. self .. " yes|no")
         local version, expected, bytes, url = M.validate_release(release)
         assert(type(rt.sleep) == "function", "rt.sleep is required by the installer")
@@ -411,11 +417,11 @@ function M.run(rt, mode, env, release)
         assert(M.count(tasks, target) <= 1, "multiple DNS tasks are running")
         local config = config_text(command("show config"))
         local schedule_id, existing = M.schedule(config)
-        log("pinned release: " .. version .. " (version and SHA256 fixed in this installer)")
+        progress(2, "Downloading pinned release: " .. version .. " (version and SHA256 fixed in this installer)")
         local body = http.fetch(rt, url, bytes)
         assert(#body == bytes, "pinned file size mismatch; current DNS unchanged")
         assert(body:byte(1) ~= 27, "invalid Lua source download")
-        log("checking SHA256 (please wait)")
+        progress(3, "Checking SHA256 and Lua syntax (please wait)")
         local hash_ticks = 0
         assert(sha.hex(body, function()
             hash_ticks = hash_ticks + 1
@@ -424,6 +430,7 @@ function M.run(rt, mode, env, release)
         end) == expected, "SHA256 mismatch; current DNS unchanged")
         assert(compile(body), "downloaded Lua syntax is invalid")
         log("SHA256 OK: " .. expected)
+        progress(4, "Preparing verified file and backup")
         assert(config_text(command("show config")) == config, "router config changed during download; retry")
         tasks = status()
         assert(M.installers(tasks) <= 1 and M.count(tasks, target) <= 1, "another installer or DNS task appeared")
@@ -441,8 +448,10 @@ function M.run(rt, mode, env, release)
         tasks = status()
         assert(M.installers(tasks) <= 1 and M.count(tasks, target) == (was_running and 1 or 0)
             and not tasks:find("nvr-dns.lua", 1, true), "Lua tasks changed during preparation; retry")
+        progress(5, "Stopping the current DNS task, if running")
         changed = true
         stop()
+        progress(6, "Installing and starting the selected DNS script")
         if old ~= body then
             remove(target)
             assert(system.rename(stage, target), "cannot activate staged Lua file")
@@ -451,9 +460,12 @@ function M.run(rt, mode, env, release)
         end
         assert(read(target) == body, "activated file differs from verified download")
         command("lua " .. target)
+        progress(7, "Checking that the DNS task stays running")
         running()
         log("DNS task is running: " .. target)
         assert(config_text(command("show config")) == config, "router config changed during startup")
+        progress(8, mode == "yes" and "Configuring autostart and saving current configuration"
+            or "Keeping autostart and saved configuration unchanged")
         if mode == "yes" then
             if not existing then
                 local line = "schedule at " .. schedule_id .. " startup * lua " .. target
@@ -476,6 +488,7 @@ function M.run(rt, mode, env, release)
             log("autostart configuration unchanged; config not saved")
         end
         complete = true
+        progress(9, "Removing temporary files and installer")
         remove(backup); remove(marker); remove(stage)
         remove(self)
         log("Installation complete: " .. version .. "; installer removed.")
