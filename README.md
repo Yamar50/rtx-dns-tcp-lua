@@ -7,11 +7,10 @@ lua -e 'local DNSINSTALL_BOOT="yes";local r=rt.httprequest({url="https://raw.git
 ```
 
 上記のコマンドをYAMAHAルーターのコマンドラインから管理者モードで実行してください。  
+WebGUIの［管理］→［保守］→［コマンドの実行］からも利用できます。[WebGUIでの完了確認](docs/installer.md#webguiからインストールする場合) · [アンインストール](docs/uninstall.md)  
 ※ルーター再起動時の自動起動を行うスケジュールも設定します。
 
 [オンラインインストールの詳しい説明](docs/installer.md)
-
-WebGUIの［管理］→［保守］→［コマンドの実行］からも利用できます。[WebGUIでの完了確認](docs/installer.md#webguiからインストールする場合) · [アンインストール](docs/uninstall.md)
 
 # YAMAHAルーターのDNSにTCPフォールバックを追加
 
