@@ -25,7 +25,7 @@ YAMAHAルーターの**管理者コンソール**で、選んだ版の1行だけ
 
 <!-- INSTALLER_COMMAND_V014_START -->
 ```text
-lua -e 'local DNSINSTALL_BOOT="yes";local r=rt.httprequest({url="https://raw.githubusercontent.com/Yamar50/rtx-dns-tcp-lua/b41c53a920ad1d71401c6a52cedce18afb825da8/installer/versions/v0.1.4/rtx-dns-install.lua",method="GET",timeout=30});assert(r.rtn1 and r.code==200 and type(r.body)=="string" and #r.body==25320,"Installer download failed");assert(loadstring(r.body))(DNSINSTALL_BOOT,"v0.1.4")'
+lua -e 'local DNSINSTALL_BOOT="yes";local r=rt.httprequest({url="https://raw.githubusercontent.com/Yamar50/rtx-dns-tcp-lua/bd9762874861d7e0e71b9dcdeba3cfc0c1a4843e/installer/versions/v0.1.4/rtx-dns-install.lua",method="GET",timeout=30});assert(r.rtn1 and r.code==200 and type(r.body)=="string" and #r.body==25773,"Installer download failed");assert(loadstring(r.body))(DNSINSTALL_BOOT,"v0.1.4")'
 ```
 <!-- INSTALLER_COMMAND_V014_END -->
 
@@ -35,23 +35,23 @@ lua -e 'local DNSINSTALL_BOOT="yes";local r=rt.httprequest({url="https://raw.git
 
 <!-- INSTALLER_COMMAND_V099_START -->
 ```text
-lua -e 'local DNSINSTALL_BOOT="yes";local r=rt.httprequest({url="https://raw.githubusercontent.com/Yamar50/rtx-dns-tcp-lua/b41c53a920ad1d71401c6a52cedce18afb825da8/installer/versions/v0.9.9/rtx-dns-install.lua",method="GET",timeout=30});assert(r.rtn1 and r.code==200 and type(r.body)=="string" and #r.body==25320,"Installer download failed");assert(loadstring(r.body))(DNSINSTALL_BOOT,"v0.9.9")'
+lua -e 'local DNSINSTALL_BOOT="yes";local r=rt.httprequest({url="https://raw.githubusercontent.com/Yamar50/rtx-dns-tcp-lua/bd9762874861d7e0e71b9dcdeba3cfc0c1a4843e/installer/versions/v0.9.9/rtx-dns-install.lua",method="GET",timeout=30});assert(r.rtn1 and r.code==200 and type(r.body)=="string" and #r.body==25773,"Installer download failed");assert(loadstring(r.body))(DNSINSTALL_BOOT,"v0.9.9")'
 ```
 <!-- INSTALLER_COMMAND_V099_END -->
 
 - `yes`：起動確認後に自動起動を登録し、`save`で現在のルーター設定全体を保存します。他の未保存の設定変更も保存されます。
 - `no`：自動起動設定と保存済みconfigを変更しません。すでにある自動起動設定は維持します。
 
-画面に`DNSINSTALL (9/9) Installation complete`が出れば、インストールは終了しています。続いて表示される案内に従って**Enterキーを押すと、ルーターのコマンドプロンプトを再表示できます。** たとえばv0.9.9では、最後に次の2行を表示します。
+画面に`DNSINSTALL (16/16) Installation complete`が出れば、インストールは終了しています。続いて表示される案内に従って**Enterキーを押すと、ルーターのコマンドプロンプトを再表示できます。** たとえばv0.9.9では、最後に次の2行を表示します。
 
 ```text
-DNSINSTALL (9/9) Installation complete: v0.9.9.
-DNSINSTALL (9/9) Press ENTER to display the router command prompt.
+DNSINSTALL (16/16) Installation complete: v0.9.9.
+DNSINSTALL Press ENTER to display the router command prompt.
 ```
 
-ログの`(1/9)`～`(9/9)`は、下の「自動で行う処理」に対応する工程番号です。所要時間の割合ではなく、SHA256計算中の進捗にも、その工程の`(3/9)`を付けます。`no`を指定した場合も、自動起動設定を維持する工程として`(8/9)`を表示します。
+ログのカウンターは、途中経過・結果を含めて表示するたびに1つ進みます。現在のv0.1.4・v0.9.9は`(1/16)`から始まり、`(16/16) Installation complete`で完了します。新規導入・同じ版の再導入・`yes`/`no`の指定によって母数は変わりません。最後のEnter案内には番号を付けません。所要時間の割合を示すものではありません。
 
-`lua`コマンドは処理中でもコンソールのプロンプトを返します。表示が混ざりにくいよう、インストーラーは最初の進捗表示前に1秒待機して改行します。プロンプトが表示されても処理は続いているため、上の完了表示を待ってください。`(9/9)`だけでは完了とは限らず、`Installation complete`まで表示されたことを確認してください。完了後はインストーラーがEnter入力を待っているわけではありません。同じコマンドを重ねて実行する必要はありません。
+`lua`コマンドは処理中でもコンソールのプロンプトを返します。表示が混ざりにくいよう、インストーラーは最初の進捗表示前に1秒待機して改行します。プロンプトが表示されても処理は続いているため、上の完了表示を待ってください。`Installation complete`まで表示されたことを確認してください。完了後はインストーラーがEnter入力を待っているわけではありません。同じコマンドを重ねて実行する必要はありません。
 
 既存の`/lua/rtx-dns.lua`と内容が同じなら、本体ファイルの上書きは省略します。ディスク上のファイルと稼働中の版が異なる場合もあるため、対象タスクは停止・再起動し、確認したファイルと現在のDNS設定を読み込みます。設定変更だけなら、ダウンロードを伴わない通常の[スクリプト再起動手順](install.md#update-script)も使用できます。
 
@@ -65,7 +65,7 @@ lua /lua/rtx-dns-install.lua yes
 
 開始時の引数には`yes`か`no`を必ず指定します。本体のSHA256照合や起動確認などは、上の1行コマンドと共通です。この方法でも、本体の取得にはルーターからのHTTPS接続が必要です。
 
-手動転送したインストーラーは、成功時に作業ファイルとともに自身を削除します。この場合の完了表示は`DNSINSTALL (9/9) Installation complete: v0.9.9; installer removed.`のようになります。失敗した場合はインストーラーを残します。
+手動転送したインストーラーは、成功時に作業ファイルとともに自身を削除します。この場合の完了表示は`DNSINSTALL (16/16) Installation complete: v0.9.9; installer removed.`のようになります。失敗した場合はインストーラーを残します。
 
 ## 自動で行う処理
 
@@ -99,7 +99,7 @@ HTTPS対応のファームウェアとGitHubへ到達できるDNS・通信設定
 
 ## 途中で失敗した場合
 
-インストーラーの処理中のエラーは`DNSINSTALL (n/9) failed`の形式で表示し、`n`には失敗した工程番号が入ります。その後の自動復旧や後始末のログにも、失敗した工程番号を付けます。起動失敗時の自動復旧が成功した場合は、`previous file and running state restored`も表示します。
+途中で失敗した場合は、進捗カウンターを止めて`DNSINSTALL failed at stage n`を表示します。`n`は「自動で行う処理」の1～9の工程番号です。エラーと自動復旧・後始末のログには進捗カウンターを付けません。起動失敗時の自動復旧が成功した場合は、`previous file and running state restored`も表示します。
 
 1行コマンドの場合は、原因を修正してから同じ1行を再実行してください。インストーラーの取得や読み込みに失敗した場合は、工程番号のないLuaエラーが出ることもあります。手動転送した場合は、失敗時に残った`/lua/rtx-dns-install.lua`を`yes`または`no`付きで再実行できます。どちらの場合も、残った作業ファイルがあるときは下記の確認と復旧を先に行ってください。
 
