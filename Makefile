@@ -1,8 +1,11 @@
 LUA ?= lua
 PYTHON ?= python3
 
-.PHONY: test build release nvr-test
+.PHONY: test build release nvr-test installer
 test:
+	$(LUA) tests/test_installer_sha256.lua
+	$(LUA) tests/test_installer_http.lua
+	$(LUA) tests/test_installer.lua
 	$(LUA) tests/test_interfaces.lua
 	$(LUA) tests/test_wire_cache.lua
 	$(LUA) tests/test_dns_policy.lua
@@ -27,3 +30,6 @@ release:
 
 nvr-test:
 	$(PYTHON) tools/build.py --config config/nvr-test.lua --output build/nvr-test/nvr-dns.lua
+
+installer:
+	$(PYTHON) tools/build_installer.py
