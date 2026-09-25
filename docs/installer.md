@@ -23,7 +23,7 @@ YAMAHAルーターの**管理者コンソール**で、選んだ版の1行だけ
 
 <!-- INSTALLER_COMMAND_V014_START -->
 ```text
-lua -e 'local DNSINSTALL_BOOT="yes";local p="/lua/rtx-dns-install.lua";local function guard()local ok,s=rt.command("show status lua running","off");assert(ok and s);local n=0;for l in s:gmatch("[^"..string.char(13,10).."]+")do assert(l:match(":%s*(/%S+)%s*$")~=p,"Installer already running");if l:find("lua %-e ")and l:find("local DNSINSTALL_BOOT=",1,true)then n=n+1 end end;assert(n<=1,"Installer already running")end;guard();local r=rt.httprequest({url="https://raw.githubusercontent.com/Yamar50/rtx-dns-tcp-lua/745ccd6b3c994ffe6b9b92c4b9bd4296032617e3/installer/versions/v0.1.4/rtx-dns-install.lua",method="GET",timeout=30});assert(r.rtn1 and r.code==200 and type(r.body)=="string" and #r.body==23744,"Installer download failed");assert(r.body:find("-- Installer release: v0.1.4"..string.char(10),1,true),"Installer version mismatch");assert(loadstring(r.body));guard();rt.command("make directory /lua","off");local f=assert(io.open(p,"wb"));assert(f:write(r.body));assert(f:close());f=assert(io.open(p,"rb"));assert(f:read("*a")==r.body);assert(f:close());arg={[0]=p,[1]=DNSINSTALL_BOOT};dofile(p)'
+lua -e 'local DNSINSTALL_BOOT="yes";local p="/lua/rtx-dns-install.lua";local function guard()local ok,s=rt.command("show status lua running","off");assert(ok and s);local n=0;for l in s:gmatch("[^"..string.char(13,10).."]+")do assert(l:match(":%s*(/%S+)%s*$")~=p,"Installer already running");if l:find("lua %-e ")and l:find("local DNSINSTALL_BOOT=",1,true)then n=n+1 end end;assert(n<=1,"Installer already running")end;guard();local r=rt.httprequest({url="https://raw.githubusercontent.com/Yamar50/rtx-dns-tcp-lua/a7ecf16b739511a76723fe1f9619c5da442073bd/installer/versions/v0.1.4/rtx-dns-install.lua",method="GET",timeout=30});assert(r.rtn1 and r.code==200 and type(r.body)=="string" and #r.body==23823,"Installer download failed");assert(r.body:find("-- Installer release: v0.1.4"..string.char(10),1,true),"Installer version mismatch");assert(loadstring(r.body));guard();rt.command("make directory /lua","off");local f=assert(io.open(p,"wb"));assert(f:write(r.body));assert(f:close());f=assert(io.open(p,"rb"));assert(f:read("*a")==r.body);assert(f:close());arg={[0]=p,[1]=DNSINSTALL_BOOT};dofile(p)'
 ```
 <!-- INSTALLER_COMMAND_V014_END -->
 
@@ -33,14 +33,21 @@ lua -e 'local DNSINSTALL_BOOT="yes";local p="/lua/rtx-dns-install.lua";local fun
 
 <!-- INSTALLER_COMMAND_V099_START -->
 ```text
-lua -e 'local DNSINSTALL_BOOT="yes";local p="/lua/rtx-dns-install.lua";local function guard()local ok,s=rt.command("show status lua running","off");assert(ok and s);local n=0;for l in s:gmatch("[^"..string.char(13,10).."]+")do assert(l:match(":%s*(/%S+)%s*$")~=p,"Installer already running");if l:find("lua %-e ")and l:find("local DNSINSTALL_BOOT=",1,true)then n=n+1 end end;assert(n<=1,"Installer already running")end;guard();local r=rt.httprequest({url="https://raw.githubusercontent.com/Yamar50/rtx-dns-tcp-lua/745ccd6b3c994ffe6b9b92c4b9bd4296032617e3/installer/versions/v0.9.9/rtx-dns-install.lua",method="GET",timeout=30});assert(r.rtn1 and r.code==200 and type(r.body)=="string" and #r.body==23744,"Installer download failed");assert(r.body:find("-- Installer release: v0.9.9"..string.char(10),1,true),"Installer version mismatch");assert(loadstring(r.body));guard();rt.command("make directory /lua","off");local f=assert(io.open(p,"wb"));assert(f:write(r.body));assert(f:close());f=assert(io.open(p,"rb"));assert(f:read("*a")==r.body);assert(f:close());arg={[0]=p,[1]=DNSINSTALL_BOOT};dofile(p)'
+lua -e 'local DNSINSTALL_BOOT="yes";local p="/lua/rtx-dns-install.lua";local function guard()local ok,s=rt.command("show status lua running","off");assert(ok and s);local n=0;for l in s:gmatch("[^"..string.char(13,10).."]+")do assert(l:match(":%s*(/%S+)%s*$")~=p,"Installer already running");if l:find("lua %-e ")and l:find("local DNSINSTALL_BOOT=",1,true)then n=n+1 end end;assert(n<=1,"Installer already running")end;guard();local r=rt.httprequest({url="https://raw.githubusercontent.com/Yamar50/rtx-dns-tcp-lua/a7ecf16b739511a76723fe1f9619c5da442073bd/installer/versions/v0.9.9/rtx-dns-install.lua",method="GET",timeout=30});assert(r.rtn1 and r.code==200 and type(r.body)=="string" and #r.body==23823,"Installer download failed");assert(r.body:find("-- Installer release: v0.9.9"..string.char(10),1,true),"Installer version mismatch");assert(loadstring(r.body));guard();rt.command("make directory /lua","off");local f=assert(io.open(p,"wb"));assert(f:write(r.body));assert(f:close());f=assert(io.open(p,"rb"));assert(f:read("*a")==r.body);assert(f:close());arg={[0]=p,[1]=DNSINSTALL_BOOT};dofile(p)'
 ```
 <!-- INSTALLER_COMMAND_V099_END -->
 
 - `yes`：起動確認後に自動起動を登録し、`save`で現在のルーター設定全体を保存します。他の未保存の設定変更も保存されます。
 - `no`：自動起動設定と保存済みconfigを変更しません。すでにある自動起動設定は維持します。
 
-画面に`DNSINSTALL complete`が出れば完了です。`lua`コマンドは処理中でもコンソールのプロンプトを返すので、完了表示を待ってください。SHA256計算中は進捗を表示します。同じコマンドを重ねて実行する必要はありません。
+画面に`DNSINSTALL Installation complete`が出れば、インストールは終了しています。続いて表示される案内に従って**Enterキーを押すと、ルーターのコマンドプロンプトを再表示できます。** たとえばv0.9.9では、最後に次の2行を表示します。
+
+```text
+DNSINSTALL Installation complete: v0.9.9; installer removed.
+DNSINSTALL Press ENTER to display the router command prompt.
+```
+
+`lua`コマンドは処理中でもコンソールのプロンプトを返し、その後にログが表示されるため、上の完了表示を待ってください。完了後はインストーラーがEnter入力を待っているわけではありません。SHA256計算中は進捗を表示します。同じコマンドを重ねて実行する必要はありません。
 
 既存の`/lua/rtx-dns.lua`と内容が同じなら、本体ファイルの上書きは省略します。ディスク上のファイルと稼働中の版が異なる場合もあるため、対象タスクは停止・再起動し、確認したファイルと現在のDNS設定を読み込みます。設定変更だけなら、ダウンロードを伴わない通常の[スクリプト再起動手順](install.md#update-script)も使用できます。
 
