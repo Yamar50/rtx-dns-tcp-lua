@@ -49,7 +49,8 @@ local function scenario(options)
         options = options, files = { [installer_path] = "-- installer" },
         commands = {}, logs = {}, sleeps = {}, schedules = {},
         running = options.running == true, starts = 0, stops = 0, saves = 0, downloads = 0,
-        writes = 0, status_calls = 0, config_reads = 0,
+        writes = 0, writes_by_path = {}, removes_by_path = {}, renames = 0, status_calls = 0, config_reads = 0,
+        loaded_body = options.running and old_body or nil,
     }
     if options.old then state.files[target] = options.same_version and new_body or old_body end
     if options.leftover then state.files[options.leftover] = "previous interrupted install" end
@@ -86,9 +87,11 @@ local function scenario(options)
         elseif command == "terminate lua file " .. target then
             state.stops = state.stops + 1
             state.running = false
+            state.loaded_body = nil
         elseif command == "lua " .. target then
             state.starts = state.starts + 1
             state.running = not (options.new_start_failure and state.files[target] == new_body)
+            state.loaded_body = state.running and state.files[target] or nil
         elseif command == "save" then
             if options.save_failure then return false, "save failed" end
             state.saves = state.saves + 1
@@ -117,6 +120,7 @@ local function scenario(options)
         end
         equal(mode, "wb")
         state.writes = state.writes + 1
+        state.writes_by_path[path] = (state.writes_by_path[path] or 0) + 1
         if options.write_failure == path then return nil, "storage full" end
         state.files[path] = ""
         local file = {}
@@ -127,11 +131,13 @@ local function scenario(options)
     local system = {}
     function system.remove(path)
         if options.remove_failure == path then return nil, "remove failed" end
+        state.removes_by_path[path] = (state.removes_by_path[path] or 0) + 1
         state.files[path] = nil
         return true
     end
     function system.rename(from, to)
         if options.rename_failure then return nil, "rename failed" end
+        state.renames = state.renames + 1
         check(state.files[from] ~= nil, "renamed a missing file")
         state.files[to], state.files[from] = state.files[from], nil
         return true
@@ -202,15 +208,24 @@ check(s.run("no"))
 equal(next(s.schedules), nil)
 equal(s.saves, 0)
 
--- Running exactly the downloaded bytes makes repeat installation idempotent:
--- no file writes, no termination, and no restart, with or without autostart.
+-- The file can contain new bytes while the task still runs older loaded code.
+-- Even with identical files, restart once to load verified code/current config;
+-- skip rewriting or renaming the active file, but keep transaction recovery data.
 for _, mode in ipairs({"yes", "no"}) do
     s = scenario({ old = true, running = true, same_version = true,
         schedules = { [100] = "startup * lua " .. target }, bootstrap = true })
+    equal(s.loaded_body, old_body)
     check(s.run(mode))
-    equal(s.writes, 0)
-    equal(s.stops, 0)
-    equal(s.starts, 0)
+    equal(s.writes, 2)
+    equal(s.writes_by_path[target], nil)
+    equal(s.writes_by_path[stage], nil)
+    equal(s.writes_by_path[backup], 1)
+    equal(s.writes_by_path[marker], 1)
+    equal(s.removes_by_path[target], nil)
+    equal(s.renames, 0)
+    equal(s.stops, 1)
+    equal(s.starts, 1)
+    equal(s.loaded_body, new_body)
     equal(s.files[target], new_body)
     equal(s.files[installer_path], nil)
     equal(s.schedules[100], "startup * lua " .. target)
@@ -264,7 +279,13 @@ for _, same_version in ipairs({false, true}) do
     equal(s.schedules[1], "daily * echo unrelated")
     equal(s.schedules[2], nil)
     equal(s.saves, 0)
-    if same_version then equal(s.starts, 0); equal(s.stops, 0) end
+    if same_version then
+        equal(s.starts, 2)
+        equal(s.stops, 2)
+        equal(s.writes_by_path[target], nil)
+        equal(s.removes_by_path[target], nil)
+        equal(s.loaded_body, new_body)
+    end
 end
 
 -- Failure to activate/start the verified update restores both previous file

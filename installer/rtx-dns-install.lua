@@ -450,26 +450,26 @@ function M.run(rt, mode, env)
         old = read(target)
         was_running = M.count(tasks, target) == 1
         assert(not was_running or old, "running DNS file is missing")
-        if old == body and was_running then
-            log("latest stable is already installed and running; file unchanged")
-        else
-            prepared = true
-            write(stage, body)
-            if old then write(backup, old) end
-            write(marker, "version=" .. version .. "\nsha256=" .. expected .. "\nold=" .. (old and "yes" or "no")
-                .. "\nrunning=" .. (was_running and "yes" or "no") .. "\n")
-            assert(read(target) == old, "installed file changed during preparation")
-            assert(config_text(command("show config")) == config, "router config changed during preparation; retry")
-            tasks = status()
-            assert(M.installers(tasks) <= 1 and M.count(tasks, target) == (was_running and 1 or 0)
-                and not tasks:find("nvr-dns.lua", 1, true), "Lua tasks changed during preparation; retry")
-            changed = true
-            stop()
+        prepared = true
+        if old ~= body then write(stage, body) end
+        if old then write(backup, old) end
+        write(marker, "version=" .. version .. "\nsha256=" .. expected .. "\nold=" .. (old and "yes" or "no")
+            .. "\nrunning=" .. (was_running and "yes" or "no") .. "\n")
+        assert(read(target) == old, "installed file changed during preparation")
+        assert(config_text(command("show config")) == config, "router config changed during preparation; retry")
+        tasks = status()
+        assert(M.installers(tasks) <= 1 and M.count(tasks, target) == (was_running and 1 or 0)
+            and not tasks:find("nvr-dns.lua", 1, true), "Lua tasks changed during preparation; retry")
+        changed = true
+        stop()
+        if old ~= body then
             remove(target)
             assert(system.rename(stage, target), "cannot activate staged Lua file")
-            assert(read(target) == body, "activated file differs from verified download")
-            command("lua " .. target)
+        else
+            log("installed file matches latest stable; restarting to load verified code and current config")
         end
+        assert(read(target) == body, "activated file differs from verified download")
+        command("lua " .. target)
         running()
         log("DNS task is running: " .. target)
         assert(config_text(command("show config")) == config, "router config changed during startup")
@@ -511,7 +511,9 @@ function M.run(rt, mode, env)
                 end
                 if changed then
                     stop()
-                    if old then write(target, old) else remove(target) end
+                    if old then
+                        if read(target) ~= old then write(target, old) end
+                    else remove(target) end
                     if was_running then command("lua " .. target); running() end
                 end
                 if prepared then remove(stage); remove(backup); remove(marker) end
