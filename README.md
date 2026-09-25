@@ -11,6 +11,8 @@ lua -e 'local DNSINSTALL_BOOT="yes";local r=rt.httprequest({url="https://raw.git
 
 [オンラインインストールの詳しい説明](docs/installer.md)
 
+WebGUIの［管理］→［保守］→［コマンドの実行］からも利用できます。[WebGUIでの完了確認](docs/installer.md#webguiからインストールする場合) · [アンインストール](docs/uninstall.md)
+
 # YAMAHAルーターのDNSにTCPフォールバックを追加
 
 **YAMAHAルーターをDNSサーバーとして使ったまま、UDPでは収まらない大きなDNS応答も受け取れるようにするLuaスクリプトです。** クライアント側のDNSサーバー設定を変えずに使えます。
