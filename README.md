@@ -6,7 +6,7 @@
 lua -e 'local DNSINSTALL_BOOT="yes";local r=rt.httprequest({url="https://raw.githubusercontent.com/Yamar50/rtx-dns-tcp-lua/bd9762874861d7e0e71b9dcdeba3cfc0c1a4843e/installer/versions/v0.9.9/rtx-dns-install.lua",method="GET",timeout=30});assert(r.rtn1 and r.code==200 and type(r.body)=="string" and #r.body==25773,"Installer download failed");assert(loadstring(r.body))(DNSINSTALL_BOOT,"v0.9.9")'
 ```
 
-上記のコマンドをヤマハルーターのコマンドラインから管理者モードで実行してください。  
+上記のコマンドをYAMAHAルーターのコマンドラインから管理者モードで実行してください。  
 ※ルーター再起動時の自動起動を行うスケジュールも設定します。
 
 [オンラインインストールの詳しい説明](docs/installer.md)
