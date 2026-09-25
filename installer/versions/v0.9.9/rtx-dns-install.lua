@@ -356,7 +356,12 @@ function M.run(rt, mode, env, release)
     local fs, system = env.io or io, env.os or os
     local compile, say = env.compile or loadstring or load, env.print or print
     local step = 1
-    local function log(s) say("DNSINSTALL (" .. step .. "/9) " .. s) end
+    local sequence, total = 0, 0
+    local function notice(s) say("DNSINSTALL " .. s) end
+    local function log(s)
+        sequence = sequence + 1
+        say(string.format("DNSINSTALL (%d/%d) %s", sequence, total, s))
+    end
     local function progress(number, message)
         step = number
         log(message)
@@ -411,9 +416,11 @@ function M.run(rt, mode, env, release)
         -- Start on a fresh line even when the prompt has no trailing newline.
         rt.sleep(1)
         say("")
+        local version, expected, bytes, url = M.validate_release(release)
+        -- Fourteen fixed messages plus one SHA update per full 64 KiB.
+        total = 14 + (bytes - bytes % 65536) / 65536
         progress(1, "Checking installation settings and router status")
         assert(mode == "yes" or mode == "no", "usage: lua " .. self .. " yes|no")
-        local version, expected, bytes, url = M.validate_release(release)
         assert(not read(marker) and not read(stage) and not read(backup),
             "previous installer files remain; see installer recovery instructions before retrying")
         local tasks = status()
@@ -431,7 +438,10 @@ function M.run(rt, mode, env, release)
         assert(sha.hex(body, function()
             hash_ticks = hash_ticks + 1
             if hash_ticks % 8 == 0 then rt.sleep(1) end
-            if hash_ticks % 32 == 0 then log("SHA256 progress: " .. math.min(hash_ticks * 2048, #body) .. "/" .. #body .. " bytes") end
+            local processed = hash_ticks * 2048
+            if hash_ticks % 32 == 0 and processed <= #body then
+                log("SHA256 progress: " .. processed .. "/" .. #body .. " bytes")
+            end
         end) == expected, "SHA256 mismatch; current DNS unchanged")
         assert(compile(body), "downloaded Lua syntax is invalid")
         log("SHA256 OK: " .. expected)
@@ -463,10 +473,10 @@ function M.run(rt, mode, env, release)
         if old ~= body then
             remove(target)
             assert(system.rename(stage, target), "cannot activate staged Lua file")
-        else
-            log("installed file matches " .. version .. "; restarting to load verified code and current config")
         end
         assert(read(target) == body, "activated file differs from verified download")
+        log(old == body and ("installed file matches " .. version .. "; restarting to load verified code and current config")
+            or ("verified file installed: " .. version))
         command("lua " .. target)
         progress(7, "Checking that the DNS task stays running")
         running()
@@ -500,10 +510,10 @@ function M.run(rt, mode, env, release)
         remove(backup); remove(marker); remove(stage)
         if not env.memory_bootstrap then remove(self) end
         log("Installation complete: " .. version .. (env.memory_bootstrap and "." or "; installer removed."))
-        log("Press ENTER to display the router command prompt.")
+        notice("Press ENTER to display the router command prompt.")
     end)
     if not ok then
-        log("failed: " .. tostring(err))
+        notice("failed at stage " .. step .. ": " .. tostring(err))
         if (changed or added_schedule) and not complete and not save_attempted then
             local restored, restore_error = pcall(function()
                 if added_schedule then
@@ -521,13 +531,13 @@ function M.run(rt, mode, env, release)
                 end
                 if prepared then remove(stage); remove(backup); remove(marker) end
             end)
-            if restored then log("previous file and running state restored")
-            else log("automatic rollback failed: " .. tostring(restore_error) .. "; keep " .. backup) end
+            if restored then notice("previous file and running state restored")
+            else notice("automatic rollback failed: " .. tostring(restore_error) .. "; keep " .. backup) end
         elseif prepared and not changed then
             local cleaned = pcall(function() remove(stage); remove(backup); remove(marker) end)
-            log(cleaned and "current DNS unchanged; staging cleaned" or "current DNS unchanged; staging cleanup failed")
+            notice(cleaned and "current DNS unchanged; staging cleaned" or "current DNS unchanged; staging cleanup failed")
         elseif save_attempted then
-            log("verified DNS retained; check whether save succeeded and inspect remaining installer files")
+            notice("verified DNS retained; check whether save succeeded and inspect remaining installer files")
         end
         return nil, tostring(err)
     end

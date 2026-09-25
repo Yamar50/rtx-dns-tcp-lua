@@ -34,10 +34,15 @@ end
 
 -- Replace external downloads and hashing, not filesystem or transaction logic.
 local saved_sha, saved_http = package.loaded.installer_sha256, package.loaded.installer_http
+local host_floor = math.floor
 local active
 package.loaded.installer_sha256 = { hex = function(data, yield_fn)
-    yield_fn()
+    -- Match the real SHA module's callback cadence, including its padding.
+    -- Progress output must not count a padding-only 64 KiB boundary.
+    local padded_bytes = #data + 9 + (119 - #data % 64) % 64
+    for _ = 1, host_floor(padded_bytes / 2048) do yield_fn() end
     if active.options.bad_sha then return string.rep("b", 64) end
+    if active.options.verified_body and data == active.options.verified_body then return digest end
     if data == new_body then return digest end
     if data == preview_body then return preview_digest end
     error("unexpected body passed to SHA256")
@@ -60,6 +65,42 @@ package.loaded.installer = nil
 local installer = require("installer")
 package.loaded.installer_sha256, package.loaded.installer_http = saved_sha, saved_http
 
+local function check_output(state, success)
+    local seen, total, failed = 0, nil, false
+    local enter = "DNSINSTALL Press ENTER to display the router command prompt."
+    for _, line in ipairs(state.logs) do
+        local current, denominator = line:match("^DNSINSTALL %((%d+)/(%d+)%) ")
+        if current then
+            check(not failed, "failure/rollback advanced the success counter")
+            seen = seen + 1
+            equal(tonumber(current), seen, "progress must increase once per displayed message")
+            total = total or tonumber(denominator)
+            equal(tonumber(denominator), total, "progress denominator changed")
+            check(seen <= total, "progress exceeded its total")
+        elseif line:match("^DNSINSTALL failed at stage %d+: ") then
+            check(not success, "success emitted a failure notice")
+            failed = true
+        elseif success then
+            check(line == "" or line == enter, "unexpected unnumbered success message: " .. line)
+        end
+        if not success then
+            check(not line:find("Installation complete:", 1, true), "failure claimed completion")
+            check(not line:find("Press ENTER", 1, true), "failure emitted the success Enter prompt")
+        end
+    end
+    if success then
+        local expected = 14 + math.floor(state.release.bytes / 65536)
+        equal(total, expected, "progress total must match payload-sized SHA checkpoints")
+        equal(seen, expected, "successful output did not finish at its total")
+        check(state.logs[#state.logs - 1]:find("Installation complete:", 1, true),
+            "completion must be the final numbered line")
+        equal(state.logs[#state.logs], enter, "Enter prompt must have no counter")
+    else
+        check(failed, "failure must have an unnumbered stage notice")
+        check(not total or seen < total, "failure falsely reached 100 percent")
+    end
+end
+
 local function scenario(options)
     options = options or {}
     local state = {
@@ -73,7 +114,7 @@ local function scenario(options)
         writes = 0, writes_by_path = {}, removes_by_path = {}, renames = 0, status_calls = 0, config_reads = 0,
         loaded_body = options.running and old_body or nil,
     }
-    if options.old then state.files[target] = options.same_version and new_body or old_body end
+    if options.old then state.files[target] = options.same_version and state.body or old_body end
     if options.memory_bootstrap and not options.keep_installer then state.files[installer_path] = nil end
     if options.leftover then state.files[options.leftover] = "previous interrupted install" end
     for id, suffix in pairs(options.schedules or {}) do state.schedules[id] = suffix end
@@ -184,8 +225,15 @@ local function scenario(options)
         active = state
         local metadata = state.release
         if options.missing_release then metadata = nil end
-        local ok, err = installer.run(rt, mode or "yes", state.env, metadata)
+        -- Yamaha's integer Lua does not provide math.floor. Keep the host-only
+        -- helper out of the runtime even when exercising failure/rollback paths.
+        local saved_floor = math.floor
+        math.floor = nil
+        local returned, ok, err = pcall(installer.run, rt, mode or "yes", state.env, metadata)
+        math.floor = saved_floor
+        if not returned then error(ok, 0) end
         equal(state.latest_calls, 0, "installer queried latest")
+        check_output(state, ok)
         return ok, err
     end
     return state
@@ -356,6 +404,41 @@ for _, mode in ipairs({"yes", "no"}) do
     equal(s.schedules[100], "startup * lua " .. target)
     equal(s.saves, mode == "yes" and 1 or 0)
     equal(s.downloads, 1)
+end
+
+-- Both invocation modes and all three file states have the same number of
+-- progress messages. The SHA checkpoint count follows downloaded bytes only,
+-- even when hash padding crosses the next callback boundary.
+for _, mode in ipairs({"yes", "no"}) do
+    for _, file_state in ipairs({"fresh", "update", "same"}) do
+        s = scenario({ old = file_state ~= "fresh", running = file_state ~= "fresh",
+            same_version = file_state == "same", bootstrap = true, memory_bootstrap = true })
+        check(s.run(mode))
+        equal(s.files[target], new_body)
+        check(s.running)
+    end
+end
+for index, item in ipairs({
+    {65463, 0}, {65464, 0}, {65527, 0}, {65528, 0}, {65535, 0}, {65536, 1},
+    {131071, 1}, {131072, 2}, {143094, 2}, {151437, 2}, {524288, 8},
+}) do
+    local bytes, checkpoints = item[1], item[2]
+    local body = "--" .. string.rep("x", bytes - 2)
+    s = scenario({ body = body, verified_body = body, release = release(nil, {bytes = bytes}),
+        old = index % 3 ~= 1, running = index % 3 ~= 1, same_version = index % 3 == 0,
+        bootstrap = true, memory_bootstrap = true })
+    check(s.run(index % 2 == 0 and "yes" or "no"))
+    local actual_checkpoints = 0
+    for _, line in ipairs(s.logs) do
+        local processed, size = line:match("SHA256 progress: (%d+)/(%d+) bytes")
+        if processed then
+            actual_checkpoints = actual_checkpoints + 1
+            equal(tonumber(processed), actual_checkpoints * 65536)
+            equal(tonumber(size), bytes)
+            check(tonumber(processed) <= bytes, "hash padding leaked into payload progress")
+        end
+    end
+    equal(actual_checkpoints, checkpoints, "wrong number of SHA progress checkpoints for " .. bytes)
 end
 
 -- Errors before activation must never stop or replace a working DNS task.
