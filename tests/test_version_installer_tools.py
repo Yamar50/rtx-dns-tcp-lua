@@ -5,6 +5,7 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -149,8 +150,47 @@ class VersionInstallerToolsTests(unittest.TestCase):
         self.assertIn(f'sha256="{self.digest}"'.encode(), body)
         self.assertIn(f'bytes={len(self.payload)}'.encode(), body)
         self.assertIn((self.payload_ref + '/installer/versions/' + self.version + '/rtx-dns.lua').encode(), body)
-        self.assertIn(b'run(rt, arg and arg[1], nil, release)', body)
+        self.assertIn(b'-- Bootstrap API: 1\n', body)
+        self.assertIn(b'local mode, expected_version = ...', body)
+        self.assertIn(b'expected_version == release.version', body)
         self.assertNotIn(b'/latest', body)
+
+    def test_bundle_checks_version_before_start_and_accepts_both_entry_modes(self):
+        lua = shutil.which('lua')
+        if not lua:
+            self.skipTest('Lua interpreter unavailable')
+        self.repo()
+        (self.root / 'src/installer.lua').write_text(
+            'return {run=function(_, mode, env, release)\n'
+            'installer_start(mode, env, release)\nreturn true\nend}\n')
+        body = self.build().decode('ascii')
+        harness = '''
+loadstring = loadstring or load
+local body = BODY
+local starts = 0
+local expected_mode = "no"
+local expected_memory = true
+installer_start = function(mode, env, release)
+ assert(mode==expected_mode and release.version=="v0.1.4")
+ assert((env~=nil and env.memory_bootstrap==true)==expected_memory)
+ starts=starts+1
+end
+arg = {[1]="invalid-global-mode"}
+assert(loadstring(body))("no", "v0.1.4")
+assert(starts==1)
+local wrong_body = body:gsub("v0%.1%.4", "v0.9.9")
+assert(#wrong_body==#body)
+local ok,err = pcall(assert(loadstring(wrong_body)), "yes", "v0.1.4")
+assert(not ok and tostring(err):find("Installer version mismatch", 1, true))
+assert(starts==1)
+expected_mode="yes"
+expected_memory=false
+arg={[1]="yes"}
+assert(loadstring(body))()
+assert(starts==2)
+'''.replace('BODY', '[====[' + body + ']====]')
+        result = subprocess.run([lua, '-'], input=harness, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_builder_refuses_uncommitted_payload_change(self):
         folder = self.repo()
@@ -178,7 +218,21 @@ class VersionInstallerToolsTests(unittest.TestCase):
         self.assertIn(f'/{ref}/installer/versions/{self.version}/rtx-dns-install.lua', command)
         self.assertIn(f'#r.body=={len(body)}', command)
         self.assertIn('DNSINSTALL_BOOT="no"', command)
-        self.assertLess(len(command), 4095)
+        self.assertIn('assert(loadstring(r.body))(DNSINSTALL_BOOT,"v0.1.4")', command)
+        self.assertNotIn('io.open', command)
+        self.assertNotIn('dofile', command)
+        self.assertNotIn('rt.command', command)
+        self.assertLess(len(command), 450)
+
+    def test_command_rejects_unsupported_bootstrap_api(self):
+        folder = self.repo()
+        body = self.build()
+        marker = b'-- Bootstrap API: 1\n'
+        for replacement in [b'', b'-- Bootstrap API: 2\n', marker * 2]:
+            with self.subTest(replacement=replacement):
+                (folder / 'rtx-dns-install.lua').write_bytes(body.replace(marker, replacement))
+                with self.assertRaisesRegex(ValueError, 'bootstrap API 1'):
+                    generator.command(self.version, self.commit(), 'no', self.root)
 
     def test_command_rejects_version_and_payload_metadata_mismatch(self):
         folder = self.repo()

@@ -150,6 +150,9 @@ function M.run(rt, mode, env, release)
         tasks = status()
         assert(M.installers(tasks) <= 1 and M.count(tasks, target) <= 1, "another installer or DNS task appeared")
         assert(not tasks:find("nvr-dns.lua", 1, true), "NVR trial task appeared during download")
+        -- Existing directories may make this command return false. The
+        -- preparation writes and read-back below verify that it is usable.
+        rt.command("make directory /lua", "off")
         old = read(target)
         was_running = M.count(tasks, target) == 1
         assert(not was_running or old, "running DNS file is missing")
@@ -203,10 +206,10 @@ function M.run(rt, mode, env, release)
             log("autostart configuration unchanged; config not saved")
         end
         complete = true
-        progress(9, "Removing temporary files and installer")
+        progress(9, env.memory_bootstrap and "Removing temporary files" or "Removing temporary files and installer")
         remove(backup); remove(marker); remove(stage)
-        remove(self)
-        log("Installation complete: " .. version .. "; installer removed.")
+        if not env.memory_bootstrap then remove(self) end
+        log("Installation complete: " .. version .. (env.memory_bootstrap and "." or "; installer removed."))
         log("Press ENTER to display the router command prompt.")
     end)
     if not ok then

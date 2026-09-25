@@ -68,11 +68,13 @@ local function scenario(options)
         body = options.body or (options.version == "v0.9.9" and preview_body or new_body),
         commands = {}, logs = {}, sleeps = {}, schedules = {},
         running = options.running == true, starts = 0, stops = 0, saves = 0, downloads = 0,
+        directory_exists = not options.missing_directory, directory_calls = 0,
         latest_calls = 0, download_urls = {},
         writes = 0, writes_by_path = {}, removes_by_path = {}, renames = 0, status_calls = 0, config_reads = 0,
         loaded_body = options.running and old_body or nil,
     }
     if options.old then state.files[target] = options.same_version and new_body or old_body end
+    if options.memory_bootstrap and not options.keep_installer then state.files[installer_path] = nil end
     if options.leftover then state.files[options.leftover] = "previous interrupted install" end
     for id, suffix in pairs(options.schedules or {}) do state.schedules[id] = suffix end
     local function config()
@@ -104,6 +106,11 @@ local function scenario(options)
             if options.config_change_at == state.config_reads then output = output .. "dns server 192.0.2.1\r\n" end
             return true, output
         elseif command == "show config 0" then return true, state.saved_config or config()
+        elseif command == "make directory /lua" then
+            state.directory_calls = state.directory_calls + 1
+            if state.directory_exists then return false, "already exists" end
+            if options.mkdir_failure then return false, "storage unavailable" end
+            state.directory_exists = true
         elseif command == "terminate lua file " .. target then
             state.stops = state.stops + 1
             state.running = false
@@ -139,6 +146,7 @@ local function scenario(options)
             return { read = function() return state.files[path] end, close = function() return true end }
         end
         equal(mode, "wb")
+        if not state.directory_exists then return nil, "directory unavailable" end
         state.writes = state.writes + 1
         state.writes_by_path[path] = (state.writes_by_path[path] or 0) + 1
         if options.write_failure == path then return nil, "storage full" end
@@ -164,6 +172,7 @@ local function scenario(options)
     end
     state.env = {
         io = fs, os = system,
+        memory_bootstrap = options.memory_bootstrap,
         compile = function(body)
             equal(body, state.body)
             if options.syntax_failure then return nil, "bad syntax" end
@@ -206,6 +215,32 @@ equal(s.files[stage], nil)
 equal(s.downloads, 1)
 equal(s.download_urls[1], s.release.url)
 
+-- The memory entry writes no installer file and creates /lua when needed.
+-- It must not remove a pre-existing file owned by a manual installation.
+for _, keep_installer in ipairs({false, true}) do
+    s = scenario({bootstrap = true, memory_bootstrap = true, keep_installer = keep_installer,
+        missing_directory = not keep_installer})
+    check(s.run("no"))
+    check(s.directory_exists)
+    equal(s.directory_calls, 1)
+    equal(s.files[installer_path], keep_installer and "-- installer" or nil)
+    equal(s.writes_by_path[installer_path], nil)
+    equal(s.removes_by_path[installer_path], nil)
+    equal(s.files[target], new_body)
+    check(s.running)
+    equal(s.saves, 0)
+end
+
+-- An unusable /lua fails at preparation, before the existing task is stopped.
+s = scenario({bootstrap = true, memory_bootstrap = true, old = true, running = true,
+    missing_directory = true, mkdir_failure = true})
+check(not s.run("no"))
+equal(s.directory_calls, 1)
+equal(s.files[target], old_body)
+check(s.running)
+equal(s.stops, 0)
+equal(s.starts, 0)
+
 -- A version-specific installer accepts the explicitly selected v0.9.9 body
 -- without looking up stable/latest or fetching a separate manifest.
 s = scenario({ version = "v0.9.9", old = true, running = true })
@@ -243,6 +278,7 @@ for _, options in ipairs({
     local ok, err = s.run("no")
     check(not ok and type(err) == "string", "invalid embedded release was accepted")
     equal(s.downloads, 0)
+    equal(s.directory_calls, 0)
     equal(s.writes, 0)
     equal(s.stops, 0)
     equal(s.starts, 0)
@@ -266,6 +302,7 @@ for _, options in ipairs({
     local ok, err = s.run("no")
     check(not ok and type(err) == "string", "unverified payload was accepted")
     equal(s.downloads, 1)
+    equal(s.directory_calls, 0)
     equal(s.writes, 0)
     equal(s.stops, 0)
     equal(s.starts, 0)

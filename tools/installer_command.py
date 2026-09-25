@@ -22,6 +22,8 @@ def command(version, ref, mode, root=ROOT):
     relative = f'installer/versions/{version}/rtx-dns-install.lua'
     body = subprocess.run(['git', 'show', f'{ref}:{relative}'], cwd=root,
                           check=True, capture_output=True).stdout
+    if re.findall(rb'^-- Bootstrap API: ([0-9]+)$', body, re.MULTILINE) != [b'1']:
+        raise ValueError('installer does not support bootstrap API 1')
     metadata = re.findall(rb'^local release = \{version="([^"]+)",sha256="([0-9a-f]{64})",bytes=([0-9]+),url="([^"]+)"\}$', body, re.MULTILINE)
     if len(metadata) != 1 or metadata[0][0].decode('ascii') != version:
         raise ValueError('installer metadata does not match the selected version')
@@ -39,19 +41,10 @@ def command(version, ref, mode, root=ROOT):
         raise ValueError('installer size is outside the supported range')
     url = f'https://raw.githubusercontent.com/Yamar50/rtx-dns-tcp-lua/{ref}/{relative}'
     script = (
-        f'local DNSINSTALL_BOOT="{mode}";local p="/lua/rtx-dns-install.lua";'
-        'local function guard()local ok,s=rt.command("show status lua running","off");assert(ok and s);local n=0;'
-        'for l in s:gmatch("[^"..string.char(13,10).."]+")do '
-        'assert(l:match(":%s*(/%S+)%s*$")~=p,"Installer already running");'
-        'if l:find("lua %-e ")and l:find("local DNSINSTALL_BOOT=",1,true)then n=n+1 end end;'
-        'assert(n<=1,"Installer already running")end;guard();'
+        f'local DNSINSTALL_BOOT="{mode}";'
         f'local r=rt.httprequest({{url="{url}",method="GET",timeout=30}});'
         f'assert(r.rtn1 and r.code==200 and type(r.body)=="string" and #r.body=={size},"Installer download failed");'
-        f'assert(r.body:find("-- Installer release: {version}"..string.char(10),1,true),"Installer version mismatch");'
-        'assert(loadstring(r.body));guard();rt.command("make directory /lua","off");'
-        'local f=assert(io.open(p,"wb"));assert(f:write(r.body));assert(f:close());'
-        'f=assert(io.open(p,"rb"));assert(f:read("*a")==r.body);assert(f:close());'
-        'arg={[0]=p,[1]=DNSINSTALL_BOOT};dofile(p)'
+        f'assert(loadstring(r.body))(DNSINSTALL_BOOT,"{version}")'
     )
     assert len(script) < 4095 and "'" not in script and '?' not in script and '\\' not in script
     return "lua -e '" + script + "'"
