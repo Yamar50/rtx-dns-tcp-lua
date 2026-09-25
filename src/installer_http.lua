@@ -1,8 +1,6 @@
 -- HTTPS downloads for the installer. Do not include response headers, URLs,
 -- cookies, or native error strings in errors: redirects can contain signatures.
 local M = {}
-local REPO = "https://github.com/Yamar50/rtx-dns-tcp-lua"
-local LATEST = REPO .. "/releases/latest/download/SHA256SUMS"
 local ALLOWED = {
     ["github.com"] = true,
     ["raw.githubusercontent.com"] = true,
@@ -102,17 +100,6 @@ function M.fetch(rt, url, maxbytes)
             fail("download returned HTTP " .. response.code)
         end
     end
-end
-
-function M.latest(rt)
-    -- GitHub chooses its latest published release here. Resolve only this first
-    -- redirect; downloading the asset is a separate operation after pinning.
-    local response = request(rt, LATEST)
-    if response.code ~= 302 then fail("latest stable release did not return HTTP 302") end
-    local target = location(response.header)
-    local version = target:match("^https://github%.com/Yamar50/rtx%-dns%-tcp%-lua/releases/download/(v%d+%.%d+%.%d+)/SHA256SUMS$")
-    if not version then fail("latest release is not an exact stable version in the expected repository") end
-    return version, REPO .. "/releases/download/" .. version .. "/"
 end
 
 return M

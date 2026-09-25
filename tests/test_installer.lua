@@ -6,6 +6,21 @@ local backup = "/lua/rtx-dns.install-old"
 local marker = "/lua/rtx-dns.install-state"
 local digest = string.rep("a", 64)
 local new_body = "-- mock verified release\n" .. string.rep("-- source\n", 120)
+local preview_digest = string.rep("c", 64)
+local preview_body = new_body:gsub("mock", "v099", 1)
+local raw_root = "https://raw.githubusercontent.com/Yamar50/rtx-dns-tcp-lua/"
+local immutable_ref = string.rep("1", 40)
+local function release(version, overrides)
+    version = version or "v0.1.4"
+    local metadata = {
+        version = version,
+        sha256 = version == "v0.9.9" and preview_digest or digest,
+        bytes = #new_body,
+        url = raw_root .. immutable_ref .. "/installer/versions/" .. version .. "/rtx-dns.lua",
+    }
+    for key, value in pairs(overrides or {}) do metadata[key] = value end
+    return metadata
+end
 local old_body = "-- previous working release"
 local count = 0
 local function check(value, message)
@@ -21,21 +36,23 @@ end
 local saved_sha, saved_http = package.loaded.installer_sha256, package.loaded.installer_http
 local active
 package.loaded.installer_sha256 = { hex = function(data, yield_fn)
-    equal(data, new_body)
     yield_fn()
-    return active.options.bad_sha and string.rep("b", 64) or digest
+    if active.options.bad_sha then return string.rep("b", 64) end
+    if data == new_body then return digest end
+    if data == preview_body then return preview_digest end
+    error("unexpected body passed to SHA256")
 end }
 package.loaded.installer_http = {
-    latest = function(rt) return rt.case.options.version or "v0.1.4" end,
+    latest = function(rt)
+        rt.case.latest_calls = rt.case.latest_calls + 1
+        error("version-specific installer must never look up latest")
+    end,
     fetch = function(rt, url)
         local state = rt.case
         state.downloads = state.downloads + 1
+        state.download_urls[#state.download_urls + 1] = url
         if state.options.download_error then error("download unavailable") end
-        if url:match("/manifest%.txt$") then
-            if state.options.manifest then return state.options.manifest end
-            local expected = state.options.changed_checksum and string.rep("c", 64) or digest
-            return (state.options.distribution_version or "v0.1.4\n") .. expected .. "  rtx-dns.lua\n"
-        elseif url:match("/rtx%-dns%.lua$") then return new_body end
+        if url:match("/rtx%-dns%.lua$") then return state.body end
         error("unexpected URL")
     end,
 }
@@ -47,8 +64,11 @@ local function scenario(options)
     options = options or {}
     local state = {
         options = options, files = { [installer_path] = "-- installer" },
+        release = options.release or release(options.version),
+        body = options.body or (options.version == "v0.9.9" and preview_body or new_body),
         commands = {}, logs = {}, sleeps = {}, schedules = {},
         running = options.running == true, starts = 0, stops = 0, saves = 0, downloads = 0,
+        latest_calls = 0, download_urls = {},
         writes = 0, writes_by_path = {}, removes_by_path = {}, renames = 0, status_calls = 0, config_reads = 0,
         loaded_body = options.running and old_body or nil,
     }
@@ -90,7 +110,7 @@ local function scenario(options)
             state.loaded_body = nil
         elseif command == "lua " .. target then
             state.starts = state.starts + 1
-            state.running = not (options.new_start_failure and state.files[target] == new_body)
+            state.running = not (options.new_start_failure and state.files[target] == state.body)
             state.loaded_body = state.running and state.files[target] or nil
         elseif command == "save" then
             if options.save_failure then return false, "save failed" end
@@ -145,7 +165,7 @@ local function scenario(options)
     state.env = {
         io = fs, os = system,
         compile = function(body)
-            equal(body, new_body)
+            equal(body, state.body)
             if options.syntax_failure then return nil, "bad syntax" end
             return function() end
         end,
@@ -153,16 +173,14 @@ local function scenario(options)
     }
     function state.run(mode)
         active = state
-        return installer.run(rt, mode or "yes", state.env)
+        local metadata = state.release
+        if options.missing_release then metadata = nil end
+        local ok, err = installer.run(rt, mode or "yes", state.env, metadata)
+        equal(state.latest_calls, 0, "installer queried latest")
+        return ok, err
     end
     return state
 end
-
--- Digest parsing is exact and rejects ambiguous or missing filenames.
-equal(installer.checksum(digest:upper() .. " *rtx-dns.lua\r\n"), digest)
-equal(pcall(installer.checksum, digest .. "  unrelated.lua\n"), false)
-equal(pcall(installer.checksum, digest .. "  rtx-dns.lua\n" .. digest .. "  rtx-dns.lua\n"), false)
-equal(pcall(installer.checksum, "short  rtx-dns.lua\n"), false)
 
 -- One command-line bootstrap is this installer; a second bootstrap or direct
 -- installer must be counted separately even though it has no script-file path.
@@ -185,6 +203,76 @@ equal(s.files[installer_path], nil)
 equal(s.files[backup], nil)
 equal(s.files[marker], nil)
 equal(s.files[stage], nil)
+equal(s.downloads, 1)
+equal(s.download_urls[1], s.release.url)
+
+-- A version-specific installer accepts the explicitly selected v0.9.9 body
+-- without looking up stable/latest or fetching a separate manifest.
+s = scenario({ version = "v0.9.9", old = true, running = true })
+check(s.run("no"))
+equal(s.files[target], preview_body)
+equal(s.loaded_body, preview_body)
+equal(s.downloads, 1)
+equal(s.download_urls[1], release("v0.9.9").url)
+check(table.concat(s.logs, "\n"):find("v0.9.9", 1, true))
+
+-- Embedded metadata is mandatory and must pin both the path's version and a
+-- complete commit ID. No network access or filesystem mutation precedes this
+-- validation; a mutable branch or a URL for another version is never used.
+for _, options in ipairs({
+    { missing_release = true },
+    { release = {} },
+    { release = release(nil, { version = "latest" }) },
+    { release = release(nil, { version = "v0.1.4-rc.1" }) },
+    { release = release(nil, { sha256 = "short" }) },
+    { release = release(nil, { sha256 = string.rep("g", 64) }) },
+    { release = release(nil, { bytes = 0 }) },
+    { release = release(nil, { bytes = 1024.5 }) },
+    { release = release(nil, { bytes = "1224" }) },
+    { release = release(nil, { url = release("v0.9.9").url }) },
+    { release = release(nil, { url = raw_root .. "main/installer/versions/v0.1.4/rtx-dns.lua" }) },
+    { release = release(nil, { url = raw_root .. "latest/installer/versions/v0.1.4/rtx-dns.lua" }) },
+    { release = release(nil, { url = raw_root .. string.rep("1", 39) .. "/installer/versions/v0.1.4/rtx-dns.lua" }) },
+    { release = release(nil, { url = raw_root .. string.rep("g", 40) .. "/installer/versions/v0.1.4/rtx-dns.lua" }) },
+    { release = release(nil, { url = release().url .. "?ref=main" }) },
+    { release = release(nil, { url = release().url:gsub("https:", "http:") }) },
+    { release = release(nil, { url = release().url:gsub("Yamar50", "another-owner") }) },
+}) do
+    options.old, options.running = true, true
+    s = scenario(options)
+    local ok, err = s.run("no")
+    check(not ok and type(err) == "string", "invalid embedded release was accepted")
+    equal(s.downloads, 0)
+    equal(s.writes, 0)
+    equal(s.stops, 0)
+    equal(s.starts, 0)
+    equal(s.saves, 0)
+    equal(s.files[target], old_body)
+    check(s.running)
+end
+
+-- Swapped or truncated bytes cannot replace a running relay, even when the
+-- other payload is an otherwise valid published version of the same size.
+for _, options in ipairs({
+    { body = new_body .. "\n" },
+    { body = new_body:sub(1, -2) },
+    { bad_sha = true },
+    { body = preview_body },
+    { version = "v0.9.9", body = new_body },
+    { version = "v0.9.9", release = release("v0.9.9", { sha256 = digest }) },
+}) do
+    options.old, options.running = true, true
+    s = scenario(options)
+    local ok, err = s.run("no")
+    check(not ok and type(err) == "string", "unverified payload was accepted")
+    equal(s.downloads, 1)
+    equal(s.writes, 0)
+    equal(s.stops, 0)
+    equal(s.starts, 0)
+    equal(s.saves, 0)
+    equal(s.files[target], old_body)
+    check(s.running)
+end
 
 -- Upgrade reuses an exact existing startup schedule; no duplicate is added.
 s = scenario({ old = true, running = true, schedules = { [100] = "startup * lua " .. target } })
@@ -230,14 +318,12 @@ for _, mode in ipairs({"yes", "no"}) do
     equal(s.files[installer_path], nil)
     equal(s.schedules[100], "startup * lua " .. target)
     equal(s.saves, mode == "yes" and 1 or 0)
-    equal(s.downloads, 2)
+    equal(s.downloads, 1)
 end
 
 -- Errors before activation must never stop or replace a working DNS task.
 for _, options in ipairs({
     { bad_sha = true }, { download_error = true }, { syntax_failure = true },
-    { distribution_version = "v9.9.9\n" }, { changed_checksum = true },
-    { manifest = "v0.1.4\nmalformed\n" }, { manifest = "v0.1.4-rc.1\n" .. digest .. "  rtx-dns.lua\n" },
     { leftover = stage }, { leftover = backup }, { leftover = marker },
     { write_failure = stage }, { write_failure = backup }, { write_failure = marker },
     { schedules = { [10] = "daily * lua " .. target } },

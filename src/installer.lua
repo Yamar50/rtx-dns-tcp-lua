@@ -1,4 +1,4 @@
--- Stable-release installer. Separate from the DNS relay runtime.
+-- Version-pinned installer. Separate from the DNS relay runtime.
 local sha = require("installer_sha256")
 local http = require("installer_http")
 local M = {}
@@ -7,20 +7,18 @@ local self = "/lua/rtx-dns-install.lua"
 local stage = "/lua/rtx-dns.install-new"
 local backup = "/lua/rtx-dns.install-old"
 local marker = "/lua/rtx-dns.install-state"
-local distribution = "https://raw.githubusercontent.com/Yamar50/rtx-dns-tcp-lua/main/installer/stable/"
 
-function M.checksum(text)
-    local result
-    assert(type(text) == "string" and #text <= 16384, "invalid SHA256SUMS")
-    for line in (text .. "\n"):gmatch("([^\r\n]+)") do
-        local digest, name = line:match("^(%x+)%s+%*?([^%s]+)%s*$")
-        assert(digest and #digest == 64, "malformed SHA256SUMS")
-        if name == "rtx-dns.lua" then
-            assert(not result, "duplicate rtx-dns.lua checksum")
-            result = digest:lower()
-        end
-    end
-    return assert(result, "rtx-dns.lua checksum missing")
+function M.validate_release(release)
+    assert(type(release) == "table", "version-pinned release metadata is required")
+    local version, digest, bytes, url = release.version, release.sha256, release.bytes, release.url
+    assert(type(version) == "string" and version:match("^v%d+%.%d+%.%d+$"), "invalid pinned version")
+    assert(type(digest) == "string" and #digest == 64 and digest:match("^[0-9a-f]+$"), "invalid pinned SHA256")
+    assert(type(bytes) == "number" and bytes % 1 == 0 and bytes >= 1024 and bytes <= 524288,
+        "invalid pinned file size")
+    assert(type(url) == "string", "missing pinned download URL")
+    local ref, path_version = url:match("^https://raw%.githubusercontent%.com/Yamar50/rtx%-dns%-tcp%-lua/([0-9a-f]+)/installer/versions/(v%d+%.%d+%.%d+)/rtx%-dns%.lua$")
+    assert(ref and #ref == 40 and path_version == version, "download URL must pin the expected version and commit")
+    return version, digest, bytes, url
 end
 
 function M.schedule(config)
@@ -67,7 +65,7 @@ local function config_text(raw)
     return table.concat(lines, "\n")
 end
 
-function M.run(rt, mode, env)
+function M.run(rt, mode, env, release)
     env = env or {}
     local fs, system = env.io or io, env.os or os
     local compile, say = env.compile or loadstring or load, env.print or print
@@ -118,6 +116,7 @@ function M.run(rt, mode, env)
     local complete, save_attempted, prepared = false, false, false
     local ok, err = pcall(function()
         assert(mode == "yes" or mode == "no", "usage: lua " .. self .. " yes|no")
+        local version, expected, bytes, url = M.validate_release(release)
         assert(type(rt.sleep) == "function", "rt.sleep is required by the installer")
         assert(not read(marker) and not read(stage) and not read(backup),
             "previous installer files remain; see installer recovery instructions before retrying")
@@ -127,16 +126,10 @@ function M.run(rt, mode, env)
         assert(M.count(tasks, target) <= 1, "multiple DNS tasks are running")
         local config = config_text(command("show config"))
         local schedule_id, existing = M.schedule(config)
-        local version = http.latest(rt)
-        log("latest stable release: " .. version .. " (Pre-release excluded)")
-        -- Version and digest are one HTTP representation. Separate metadata
-        -- URLs could be cached from different publications.
-        local manifest = http.fetch(rt, distribution .. "manifest.txt", 16384)
-        local published, sums = manifest:match("^(v%d+%.%d+%.%d+)\n(.*)$")
-        assert(published == version, "stable installer distribution is not ready for " .. version .. "; use Release downloads")
-        local expected = M.checksum(sums)
-        local body = http.fetch(rt, distribution .. "rtx-dns.lua", 524288)
-        assert(#body >= 1024 and body:byte(1) ~= 27, "invalid Lua source download")
+        log("pinned release: " .. version .. " (version and SHA256 fixed in this installer)")
+        local body = http.fetch(rt, url, bytes)
+        assert(#body == bytes, "pinned file size mismatch; current DNS unchanged")
+        assert(body:byte(1) ~= 27, "invalid Lua source download")
         log("checking SHA256 (please wait)")
         local hash_ticks = 0
         assert(sha.hex(body, function()
@@ -169,7 +162,7 @@ function M.run(rt, mode, env)
             remove(target)
             assert(system.rename(stage, target), "cannot activate staged Lua file")
         else
-            log("installed file matches latest stable; restarting to load verified code and current config")
+            log("installed file matches " .. version .. "; restarting to load verified code and current config")
         end
         assert(read(target) == body, "activated file differs from verified download")
         command("lua " .. target)

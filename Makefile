@@ -32,4 +32,4 @@ nvr-test:
 	$(PYTHON) tools/build.py --config config/nvr-test.lua --output build/nvr-test/nvr-dns.lua
 
 installer:
-	$(PYTHON) tools/build_installer.py
+	$(PYTHON) tools/build_installer.py --version "$(VERSION)" --payload-ref "$(PAYLOAD_REF)"

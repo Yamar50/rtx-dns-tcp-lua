@@ -1,7 +1,6 @@
 package.path = "src/?.lua;" .. package.path
 local http = require("installer_http")
 local count = 0
-local REPO = "https://github.com/Yamar50/rtx-dns-tcp-lua"
 local RAW = "https://raw.githubusercontent.com/Yamar50/rtx-dns-tcp-lua/abcdef/rtx-dns.lua"
 local function equal(actual, expected)
     count = count + 1
@@ -36,29 +35,6 @@ do
     equal(body, "abcd")
     equal(final, RAW)
     equal(#calls, 1)
-end
-
--- Only the first latest redirect is requested; neither asset body nor cookies
--- are needed to choose the exact stable release.
-do
-    local target = REPO .. "/releases/download/v0.9.9/SHA256SUMS"
-    local rt, calls = mock({ { rtn1 = true, code = 302, header =
-        "HTTP/1.1 302 Found\nlocation:\t" .. target .. " \nSet-Cookie: private\n", body = "ignored" } })
-    local version, base = http.latest(rt)
-    equal(version, "v0.9.9")
-    equal(base, REPO .. "/releases/download/v0.9.9/")
-    equal(#calls, 1)
-    equal(calls[1], REPO .. "/releases/latest/download/SHA256SUMS")
-end
-for _, suffix in ipairs({ "v0.9.9-beta/SHA256SUMS", "v0.9.90/SHA256SUMS.extra", "v0.9.9/SHA256SUMS?x=1", "v0.9.9/SHA256SUMS/SHA256SUMS" }) do
-    local rt = mock({ redirect(REPO .. "/releases/download/" .. suffix) })
-    rejects(function() http.latest(rt) end, "not an exact stable version")
-end
-do
-    local rt = mock({ redirect("https://github.com/other/rtx-dns-tcp-lua/releases/download/v0.9.9/SHA256SUMS") })
-    rejects(function() http.latest(rt) end, "expected repository")
-    rt = mock({ { rtn1 = true, code = 200, body = "not a release redirect" } })
-    rejects(function() http.latest(rt) end, "HTTP 302")
 end
 
 -- The allowlist matches authorities exactly, before any network request.
