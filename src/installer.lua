@@ -120,10 +120,14 @@ function M.run(rt, mode, env, release)
     local old, was_running, changed, added_schedule
     local complete, save_attempted, prepared = false, false, false
     local ok, err = pcall(function()
+        assert(type(rt.sleep) == "function", "rt.sleep is required by the installer")
+        -- Yield before logging so the asynchronous CLI can return its prompt.
+        -- Start on a fresh line even when the prompt has no trailing newline.
+        rt.sleep(1)
+        say("")
         progress(1, "Checking installation settings and router status")
         assert(mode == "yes" or mode == "no", "usage: lua " .. self .. " yes|no")
         local version, expected, bytes, url = M.validate_release(release)
-        assert(type(rt.sleep) == "function", "rt.sleep is required by the installer")
         assert(not read(marker) and not read(stage) and not read(backup),
             "previous installer files remain; see installer recovery instructions before retrying")
         local tasks = status()
