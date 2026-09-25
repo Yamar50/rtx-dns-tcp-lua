@@ -193,7 +193,8 @@ function M.run(rt, mode, env, release)
         complete = true
         remove(backup); remove(marker); remove(stage)
         remove(self)
-        log("complete: " .. version .. "; installer removed")
+        log("Installation complete: " .. version .. "; installer removed.")
+        log("Press ENTER to display the router command prompt.")
     end)
     if not ok then
         log("failed: " .. tostring(err))
