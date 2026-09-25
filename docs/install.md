@@ -32,6 +32,8 @@ GitHubの[v0.9.9 Release](https://github.com/Yamar50/rtx-dns-tcp-lua/releases/ta
 
 ## 初回インストール
 
+安定版だけを自動取得・SHA256照合・起動する場合は、[コマンド1行のインストーラー](installer.md)も利用できます。Pre-releaseのv0.9.9には以下の転送手順を使用してください。
+
 USBメモリやmicroSDカード、SFTP等でインストールします。機種が備える転送方法を使用してください。
 
 ### 例）USBメモリを使用する場合
