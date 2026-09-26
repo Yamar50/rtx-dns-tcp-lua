@@ -1,10 +1,48 @@
-# 開発・検証用の手動設定と一時実行
+# ソースのビルド・開発・検証
+
+[インストールと機能](../README.md) · [技術資料一覧](README.md)
+
+<a id="開発検証用の手動設定と一時実行"></a>
 
 ソースコード・テスト・ドキュメントはすべてOpenAI Codexで生成した。
 
-このページは、試験ポート・送信元・ローカルゾーンなどを明示して過去の試験を再現する場合の資料です。通常のインストールでは、ここにある編集・試験用ビルド・再ビルドは不要です。[インストールと起動](install.md)に従い、Releaseの`rtx-dns.lua`をそのまま使ってください。
+このページは、ソースからのビルドと試験用設定を扱います。通常の導入では、編集・ビルドは不要です。[オンラインインストール](../README.md)を使うか、[配布ファイルを転送する手順](install.md)に従ってください。
 
 `make build`は`config/example.lua`を使い、ループバック限定・120秒の試験ファイルを生成します。通常配布版は`make release`で生成します。
+
+## ソースからのビルドとテスト
+
+ビルドはPython 3の標準ライブラリだけを使用します。ローカルの単体テストにはLuaも必要です。生成物は1本のLuaファイルで、YAMAHAルーターへの追加ライブラリのインストールは不要です。
+
+```sh
+lua tests/test_interfaces.lua
+lua tests/test_wire_cache.lua
+lua tests/test_dns_policy.lua
+lua tests/test_dynamic_policy.lua
+lua tests/test_ipv6_fallback.lua
+lua tests/test_dns_runtime.lua
+lua tests/test_aaaa_filter.lua
+lua tests/test_auto_config.lua
+lua tests/test_nvr_compat.lua
+lua tests/test_policy_wire.lua
+lua tests/test_main.lua
+lua tests/test_relay.lua
+lua tests/cache_memory.lua
+python3 -m unittest discover -s tests -p 'test_*.py'
+python3 tools/build.py --config config/release.lua --output build/release/rtx-dns.lua
+```
+
+`make test` / `make release` も利用できます。上記のビルドは、Releaseと同じ自動設定プロファイルを使います。YAMAHAルーターは整数版Luaなので、小数の数値リテラル、32bit符号付き整数を超える直接計算、標準LuaSocket前提のコードを追加しないでください。
+
+## ファイル構成
+
+- `src/`：DNS wire処理、キャッシュ、DNS選択規則、TCPリレー、起動処理。
+- `config/release.lua`：転送・起動だけで利用する配布版の自動設定プロファイル。
+- `config/example.lua`：開発・検証専用のループバック限定・120秒の手動設定。
+- `tools/build.py`：単一Luaファイルへの結合。
+- `tools/serve_artifact.py`：生成物1ファイルの一時配布。
+- `tests/`：単体テスト、合成DNSサーバー、負荷・障害試験用ハーネス。
+- `tools/summarize_run.py` / `tools/plot_load.py`：測定結果の集計・描画。描画のみMatplotlibが必要です。
 
 ## 試験用の手動設定
 
