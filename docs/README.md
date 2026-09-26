@@ -23,6 +23,7 @@
 | IPv6のみの上流DNSが設定されている場合 | [IPv4 DNSへの切替仕様](dns-ipv6-fallback.md) |
 | 現在の制約と過去版で修正した問題 | [既知の問題](known-issues.md) |
 | ソースからのビルド、試験用設定、ファイル構成 | [開発・検証](development.md) |
+| 変更したときに見直す文書・画像・Releaseの対応 | [文書の関連付けと更新手順](maintenance.md) |
 | コードの生成方法、公開ソースとの照合 | [コードの来歴](code-provenance.md) |
 | ライセンスと利用責任 | [ライセンスと免責事項](technical-overview.md#ライセンスと免責事項) |
 

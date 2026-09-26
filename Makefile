@@ -1,8 +1,9 @@
 LUA ?= lua
 PYTHON ?= python3
 
-.PHONY: test build release nvr-test installer uninstaller
+.PHONY: test build release nvr-test installer uninstaller docs-check
 test:
+	$(PYTHON) tools/doc_impact.py --check
 	$(LUA) tests/test_installer_sha256.lua
 	$(LUA) tests/test_installer_http.lua
 	$(LUA) tests/test_installer.lua
@@ -22,6 +23,10 @@ test:
 	$(LUA) tests/cache_memory.lua
 	$(PYTHON) -m unittest discover -s tests -p 'test_*.py'
 	$(PYTHON) -m py_compile tools/build.py tools/serve_artifact.py tools/summarize_run.py tools/plot_load.py tests/integration.py tests/live_scenarios.py tests/resilience_scenarios.py
+
+docs-check:
+	$(PYTHON) tools/doc_impact.py --check
+	$(PYTHON) -m unittest discover -s tests -p 'test_doc_impact.py'
 
 build:
 	$(PYTHON) tools/build.py --config config/example.lua --output build/rtx-dns.lua

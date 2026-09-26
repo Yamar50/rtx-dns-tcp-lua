@@ -1,0 +1,600 @@
+{
+  "schema_version": 1,
+  "policy": {
+    "purpose": "Change topic/path -> authorities -> current docs/generated artifacts/historical evidence/external surfaces. Review before editing and after final diff; do not read whole chat.",
+    "field_semantics": {
+      "triggers": "Changed input paths/globs; topic can be selected before files exist.",
+      "authority": "Implementation/generator or dedicated factual reference; read relevant portions.",
+      "review": "Current explanatory copies to check; not mandatory edits.",
+      "artifacts": "Generated or published files; consider rebuild only when applicable.",
+      "historical": "Dated/version-specific evidence; preserve observations, append corrections/follow-ups with date.",
+      "external": "Independent publication surface, not updated by Git commit alone.",
+      "checks": "Semantic review obligations, not automatic test results."
+    },
+    "matching": "Any matching path in triggers/authority/review/artifacts/historical selects that group. Multiple matches are expected; filter actual required edits using scope and record reasons.",
+    "authority_order": [
+      "actual implementation + release profile for current behavior",
+      "specific measured evidence for test claims",
+      "official references/contributor reports with exact version for compatibility",
+      "dedicated current guide for explanatory summaries",
+      "README/Release summaries are derived copies"
+    ],
+    "dispositions": [
+      "updated",
+      "checked-no-change",
+      "pending"
+    ],
+    "checkpoint_fields": [
+      "task",
+      "starting_commit",
+      "final_commit",
+      "selected_topics",
+      "target",
+      "disposition",
+      "reason",
+      "version_or_date",
+      "evidence",
+      "external_readback"
+    ],
+    "history_rule": "Do not blanket-replace old values in historical tests. If current docs summarize old evidence, make chronology/scope explicit. New implementation is not new proof.",
+    "publication_rule": "Read fresh remote state, publish only authorized changes, verify actual remote content; mark remaining work pending. No credentials or private deployment names in public files."
+  },
+  "external_surfaces": {
+    "github_release_bodies": {
+      "repository": "Yamar50/rtx-dns-tcp-lua",
+      "maintained": [
+        {
+          "tag": "v0.1.4",
+          "source": "docs/releases/v0.1.4.md"
+        },
+        {
+          "tag": "v0.9.9",
+          "source": "docs/releases/v0.9.9.md"
+        }
+      ],
+      "rule": "Source Markdown is intended body. Before PATCH, compare fresh remote. After PATCH, compare exact body. Preserve flags/assets/tag/latest. Other versions are historical unless explicitly selected."
+    },
+    "github_release_assets": {
+      "rule": "Verify affected asset version/name/size/hash/download against committed generation inputs. Preserve unrelated assets and all DNS payloads on docs-only edits."
+    },
+    "repository_mirrors": {
+      "rule": "If mirroring is configured privately, push intended branches and verify source trees; do not expose private remotes or merge private history into public."
+    },
+    "github_issues": {
+      "rule": "Template source lives in .github/ISSUE_TEMPLATE. Report facts may update docs; sending replies needs explicit user authorization."
+    },
+    "github_repository_metadata": {
+      "rule": "Repository About/settings are external and not updated by README commits; change only if authorized."
+    }
+  },
+  "coverage": {
+    "include": [
+      "README.md",
+      "AGENTS.md",
+      "docs/**",
+      "src/**",
+      "config/**",
+      "tools/**",
+      "tests/**",
+      "Makefile",
+      "installer/**",
+      ".github/ISSUE_TEMPLATE/**"
+    ],
+    "exclude": [
+      "**/__pycache__/**",
+      "**/*.pyc"
+    ]
+  },
+  "groups": [
+    {
+      "id": "installer-progress",
+      "title": "進捗・完了・エラー表示と試験要約",
+      "triggers": [
+        "src/installer.lua",
+        "tests/test_installer.lua"
+      ],
+      "authority": [
+        "src/installer.lua"
+      ],
+      "review": [
+        "docs/installer.md",
+        "docs/uninstall.md"
+      ],
+      "artifacts": [
+        "installer/versions/*/rtx-dns-install.lua"
+      ],
+      "historical": [
+        "docs/results/short-bootstrap-2026-09-25.md",
+        "docs/results/versioned-installer-2026-09-25.md",
+        "docs/results/webgui-uninstaller-2026-09-25.md"
+      ],
+      "external": [
+        "github_release_assets"
+      ],
+      "checks": [
+        "Recompute display count from release bytes and log sites; do not replace operation stage numbers.",
+        "Review ALL completion examples, count explanations, and test-summary paragraphs in installer.md, including HTTPS distribution section.",
+        "A historical nine-stage observation remains nine-stage; append dated follow-up with version, mode, transport, and actual results.",
+        "Changed bundle bytes/ref also select online-installer for command/image/publication review. Documentation-only corrections do not rebuild bundles."
+      ]
+    },
+    {
+      "id": "online-installer",
+      "title": "オンライン導入・固定コマンド・保存・復旧",
+      "triggers": [
+        "src/installer*.lua",
+        "tools/build_installer.py",
+        "tools/installer_command.py",
+        "tools/prepare_version_installer.py",
+        "tests/test_installer*",
+        "tests/test_version_installer_tools.py"
+      ],
+      "authority": [
+        "src/installer.lua",
+        "src/installer_http.lua",
+        "src/installer_sha256.lua",
+        "tools/build_installer.py",
+        "tools/installer_command.py",
+        "tools/prepare_version_installer.py"
+      ],
+      "review": [
+        "docs/installer.md",
+        "docs/install.md",
+        "docs/uninstall.md",
+        "README.md",
+        "docs/releases/v0.1.4.md",
+        "docs/releases/v0.9.9.md",
+        "docs/development.md"
+      ],
+      "artifacts": [
+        "installer/versions/*/rtx-dns-install.lua",
+        "installer/versions/*/rtx-dns.lua",
+        "installer/versions/*/SHA256SUMS",
+        "installer/versions/*/manifest.txt",
+        "docs/images/install-*"
+      ],
+      "historical": [
+        "docs/results/installer-2026-09-25.md",
+        "docs/results/versioned-installer-2026-09-25.md",
+        "docs/results/short-bootstrap-2026-09-25.md",
+        "docs/results/webgui-uninstaller-2026-09-25.md"
+      ],
+      "external": [
+        "github_release_bodies",
+        "github_release_assets",
+        "repository_mirrors"
+      ],
+      "checks": [
+        "Keep payload version/bytes/SHA/commit distinct from installer commit/bytes; committed bundles are the command input.",
+        "Generate commands using tools/installer_command.py for each affected version and mode; compare literals in README, installer.md and maintained Release bodies; search remaining copies.",
+        "Inspect command text in PNG/SVG screenshots; recreate or explicitly label older examples. Do not invent a real screenshot or change command characters.",
+        "Check WebGUI acceptance vs completion, save semantics, no/yes behavior, schedule IDs, task checks, rollback, and restart guidance.",
+        "Respect existing version pins; do not replace an existing version payload with a new DNS release.",
+        "Review result summaries even if the link target is already correct; preserve dated test scopes."
+      ]
+    },
+    {
+      "id": "uninstaller",
+      "title": "削除対象・自動起動解除・保存・再導入",
+      "triggers": [
+        "src/uninstaller.lua",
+        "tools/build_uninstaller.py",
+        "tests/test_uninstaller*"
+      ],
+      "authority": [
+        "src/uninstaller.lua",
+        "tools/build_uninstaller.py"
+      ],
+      "review": [
+        "docs/uninstall.md",
+        "docs/installer.md",
+        "docs/install.md",
+        "README.md",
+        "docs/releases/v0.1.4.md",
+        "docs/releases/v0.9.9.md"
+      ],
+      "artifacts": [
+        "installer/rtx-dns-uninstall.lua"
+      ],
+      "historical": [
+        "docs/results/webgui-uninstaller-2026-09-25.md"
+      ],
+      "external": [
+        "github_release_bodies",
+        "repository_mirrors"
+      ],
+      "checks": [
+        "Regenerate bundle only after source change; pin command to committed output and verify length with tools/build_uninstaller.py --ref.",
+        "Check exact deletion scope, matching schedules, saved/running configuration effects, idempotence, failure state and reinstall links.",
+        "WebGUI command acceptance is not successful completion; console output and WebGUI status instructions differ."
+      ]
+    },
+    {
+      "id": "quick-start",
+      "title": "概要・導入画面・TCP補完図・導線",
+      "triggers": [
+        "README.md",
+        "docs/releases/v0.1.4.md",
+        "docs/releases/v0.9.9.md",
+        "docs/images/*",
+        ".github/ISSUE_TEMPLATE/*"
+      ],
+      "authority": [
+        "docs/installer.md",
+        "docs/uninstall.md",
+        "docs/technical-overview.md",
+        "docs/images/dns-tcp-*-v099.mmd",
+        "docs/images/render-v099.cjs",
+        "docs/images/install-console-*.svg"
+      ],
+      "review": [
+        "README.md",
+        "docs/releases/v0.1.4.md",
+        "docs/releases/v0.9.9.md",
+        "docs/README.md",
+        "docs/install.md",
+        "docs/compatibility.md"
+      ],
+      "artifacts": [
+        "docs/images/*.png",
+        "docs/images/*.svg",
+        ".github/ISSUE_TEMPLATE/*"
+      ],
+      "historical": [],
+      "external": [
+        "github_release_bodies",
+        "github_issues"
+      ],
+      "checks": [
+        "Keep two short sections: online installation and capabilities. Link technical details; avoid repeated download links and audience labels.",
+        "README Mermaid and Release PNG diagrams describe the same UDP/TCP flow. Re-render affected editable diagrams and visually inspect.",
+        "Release image URLs may pin main or a tag; editing main cannot update a tag-pinned image. Never move a published tag to refresh an image.",
+        "Keep commands exact, mask identifiers in illustrations, and distinguish illustrations from real screenshots.",
+        "Verify relative links, section anchors, direct Issue template links and mobile-friendly download links."
+      ]
+    },
+    {
+      "id": "dns-policy",
+      "title": "DNS選択・PP/DHCP・IPv4切替・定期更新",
+      "triggers": [
+        "src/dns_policy.lua",
+        "src/dns_runtime.lua",
+        "src/auto_config.lua",
+        "tests/test_dns_policy.lua",
+        "tests/test_dynamic_policy.lua",
+        "tests/test_ipv6_fallback.lua",
+        "tests/test_dns_runtime.lua",
+        "tests/test_aaaa_filter.lua",
+        "tests/test_auto_config.lua",
+        "tests/test_policy_wire.lua"
+      ],
+      "authority": [
+        "src/dns_policy.lua",
+        "src/dns_runtime.lua",
+        "src/auto_config.lua"
+      ],
+      "review": [
+        "docs/dns-policy.md",
+        "docs/dns-ipv6-fallback.md",
+        "docs/technical-overview.md",
+        "docs/install.md",
+        "docs/development.md",
+        "docs/known-issues.md"
+      ],
+      "artifacts": [],
+      "historical": [
+        "docs/validation.md",
+        "docs/releases/v0.1.4-details.md",
+        "docs/releases/v0.9.9-details.md",
+        "docs/compatibility-plan.md",
+        "docs/releases/v0.1.2.md"
+      ],
+      "external": [],
+      "checks": [
+        "Config reload requires explicit script restart; periodic refresh concerns dynamic PP/DHCP state. Review this distinction whenever polling changes.",
+        "Keep selection priority, source-address matching, IPv6-only fallback, unknown acquisition state, explicit refusal and AAAA filtering consistent.",
+        "Reflect user-visible capability changes in selected new Release details; do not assign new behavior to old releases.",
+        "When publishing changed runtime code, also select release-publication for version/build/installer/assets review."
+      ]
+    },
+    {
+      "id": "compatibility",
+      "title": "機種・ファームウェア・API・インターフェース・動作報告",
+      "triggers": [
+        "src/interfaces.lua",
+        "src/main.lua",
+        "src/auto_config.lua",
+        "src/dns_runtime.lua",
+        "config/nvr-test.lua",
+        "tests/test_interfaces.lua",
+        "tests/test_nvr_compat.lua",
+        "tests/test_main.lua"
+      ],
+      "authority": [
+        "src/interfaces.lua",
+        "src/main.lua",
+        "src/auto_config.lua",
+        "src/dns_runtime.lua",
+        "docs/compatibility.md"
+      ],
+      "review": [
+        "docs/compatibility.md",
+        "docs/install.md",
+        "docs/dns-policy.md",
+        "docs/technical-overview.md",
+        "docs/README.md",
+        ".github/ISSUE_TEMPLATE/01-bug-report.yml",
+        ".github/ISSUE_TEMPLATE/02-device-report.yml"
+      ],
+      "artifacts": [],
+      "historical": [
+        "docs/validation.md",
+        "docs/compatibility-plan.md",
+        "docs/releases/v0.1.4-nvr.1.md",
+        "docs/releases/v0.1.4-details.md",
+        "docs/releases/v0.9.9-details.md"
+      ],
+      "external": [
+        "github_issues"
+      ],
+      "checks": [
+        "Record model, firmware, script version, test scope, source link and observed/reported/expected distinction.",
+        "OEM report does not prove the native model or a different firmware/script revision; do not infer unknown minimum firmware.",
+        "Check official Lua/API support and accepted interface forms separately from successful native tests.",
+        "A report may require only a compatibility-row update; inspect duplicated summaries and record no-change reason.",
+        "Issue replies are external messages and require explicit authorization, separate from documentation edits.",
+        "When publishing changed runtime code, also select release-publication for version/build/installer/assets review."
+      ]
+    },
+    {
+      "id": "relay-limits",
+      "title": "DNS wire・キャッシュ・接続/流量制限・タイムアウト",
+      "triggers": [
+        "src/cache.lua",
+        "src/dns_wire.lua",
+        "src/relay.lua",
+        "src/main.lua",
+        "config/release.lua",
+        "config/example.lua",
+        "tests/test_wire_cache.lua",
+        "tests/test_relay.lua",
+        "tests/cache_memory.lua",
+        "tests/test_policy_wire.lua",
+        "tests/test_main.lua"
+      ],
+      "authority": [
+        "src/cache.lua",
+        "src/dns_wire.lua",
+        "src/relay.lua",
+        "src/main.lua",
+        "config/release.lua",
+        "config/example.lua"
+      ],
+      "review": [
+        "docs/technical-overview.md",
+        "docs/development.md",
+        "docs/install.md",
+        "docs/known-issues.md",
+        "docs/dns-policy.md",
+        "docs/dns-ipv6-fallback.md"
+      ],
+      "artifacts": [],
+      "historical": [
+        "docs/validation.md",
+        "docs/load-test-*.md",
+        "docs/releases/v0.1.3.md",
+        "docs/releases/v0.1.4-details.md",
+        "docs/releases/v0.9.9-details.md"
+      ],
+      "external": [],
+      "checks": [
+        "Reconcile defaults/units/ranges in config and runtime with parameter tables and limits.",
+        "Separate upstream TCP 65535-byte limit from built-in UDP receive limit, cache limits, client caps, and send timeout start.",
+        "Review security/abuse and normal-vs-unrestricted-test claims; new code is not validated by old test results.",
+        "If conceptual routing changes, also review quick-start diagrams; if release payload changes, select release-publication."
+      ]
+    },
+    {
+      "id": "validation",
+      "title": "機能・セキュリティ・負荷・不具合の根拠",
+      "triggers": [
+        "tests/integration.py",
+        "tests/live_scenarios.py",
+        "tests/resilience_scenarios.py",
+        "tests/test_harness.py",
+        "tests/test_measurements.py",
+        "tests/cache_memory.lua",
+        "tools/summarize_run.py",
+        "tools/plot_load.py"
+      ],
+      "authority": [
+        "tests/integration.py",
+        "tests/live_scenarios.py",
+        "tests/resilience_scenarios.py",
+        "tools/summarize_run.py",
+        "tools/plot_load.py"
+      ],
+      "review": [
+        "docs/known-issues.md",
+        "docs/technical-overview.md",
+        "docs/compatibility.md",
+        "docs/README.md"
+      ],
+      "artifacts": [
+        "docs/load-test-*.csv"
+      ],
+      "historical": [
+        "docs/validation.md",
+        "docs/load-test-*.md",
+        "docs/results/*.md",
+        "docs/releases/v0.1.4-details.md",
+        "docs/releases/v0.9.9-details.md",
+        "docs/releases/v0.1.2.md",
+        "docs/releases/v0.1.3.md"
+      ],
+      "external": [],
+      "checks": [
+        "New measurements need version/hash, model/firmware, test profile, restrictions, inputs, denominator, failures and limitations.",
+        "Differentiate production defaults and diagnostics with relaxed safeguards; retain the distinction in reboot/performance summaries.",
+        "Update current summaries and known-issue resolution status from evidence; append dated results rather than replacing old observations.",
+        "Do not publish private router names/IPs, raw configs, credentials or identifying screenshots."
+      ]
+    },
+    {
+      "id": "release-publication",
+      "title": "版・ビルド・配布物・Release本文・同期",
+      "triggers": [
+        "tools/build.py",
+        "tools/serve_artifact.py",
+        "Makefile",
+        "config/release.lua",
+        "installer/versions/*/manifest.txt",
+        "installer/versions/*/SHA256SUMS",
+        "installer/versions/*/rtx-dns.lua"
+      ],
+      "authority": [
+        "tools/build.py",
+        "config/release.lua",
+        "Makefile",
+        "tools/prepare_version_installer.py",
+        "tools/build_installer.py"
+      ],
+      "review": [
+        "README.md",
+        "docs/install.md",
+        "docs/installer.md",
+        "docs/uninstall.md",
+        "docs/development.md",
+        "docs/known-issues.md",
+        "docs/README.md",
+        "docs/releases/v0.1.4.md",
+        "docs/releases/v0.9.9.md"
+      ],
+      "artifacts": [
+        "installer/versions/*/rtx-dns.lua",
+        "installer/versions/*/SHA256SUMS",
+        "installer/versions/*/manifest.txt",
+        "installer/versions/*/rtx-dns-install.lua"
+      ],
+      "historical": [
+        "docs/releases/v0.1.4-details.md",
+        "docs/releases/v0.9.9-details.md",
+        "docs/releases/v0.1.2.md",
+        "docs/releases/v0.1.3.md",
+        "docs/releases/v0.1.4-nvr.1.md",
+        "docs/compatibility-plan.md",
+        "docs/validation.md"
+      ],
+      "external": [
+        "github_release_bodies",
+        "github_release_assets",
+        "repository_mirrors"
+      ],
+      "checks": [
+        "New version: add/select its short Release body and details; update external mappings and desired default install version explicitly. Do not assume prerelease means stable/latest.",
+        "Verify version/bytes/SHA/commit across payload, manifest, checksum, installer and published downloads.",
+        "Fetch fresh remote state; preserve assets/flags/tag/latest on body-only edits. Repository push alone does not publish Release edits.",
+        "Build once from intended config, verify, then publish authorized artifacts; do not silently replace existing version payload.",
+        "Record source commit, tag, mirrors, body and download readback separately; public source and private history need not share commit IDs."
+      ]
+    },
+    {
+      "id": "development",
+      "title": "ビルド手順・試験実行・開発設定",
+      "triggers": [
+        "Makefile",
+        "tools/build.py",
+        "tools/serve_artifact.py",
+        "config/*.lua",
+        "tests/test_*",
+        "tests/cache_memory.lua"
+      ],
+      "authority": [
+        "Makefile",
+        "tools/build.py",
+        "config/example.lua",
+        "config/release.lua"
+      ],
+      "review": [
+        "docs/development.md",
+        "docs/technical-overview.md",
+        "docs/install.md",
+        "docs/README.md"
+      ],
+      "artifacts": [],
+      "historical": [
+        "docs/compatibility-plan.md"
+      ],
+      "external": [],
+      "checks": [
+        "Examples distinguish local test (loopback, finite duration) and release (auto config) profiles.",
+        "Check documented test commands and new tools; avoid adding runtime requirements for documentation-only tooling.",
+        "Keep integer Lua and YAMAHA API assumptions explicit."
+      ]
+    },
+    {
+      "id": "provenance",
+      "title": "生成元・ライセンス・免責・公開範囲",
+      "triggers": [
+        "docs/code-provenance.md"
+      ],
+      "authority": [
+        "docs/code-provenance.md"
+      ],
+      "review": [
+        "README.md",
+        "docs/technical-overview.md",
+        "docs/install.md",
+        "docs/releases/v0.1.4.md",
+        "docs/releases/v0.9.9.md"
+      ],
+      "artifacts": [],
+      "historical": [
+        "docs/releases/v0.1.4-details.md",
+        "docs/releases/v0.9.9-details.md",
+        "docs/releases/v0.1.2.md",
+        "docs/releases/v0.1.3.md",
+        "docs/releases/v0.1.4-nvr.1.md"
+      ],
+      "external": [
+        "github_repository_metadata"
+      ],
+      "checks": [
+        "Retain Codex provenance statement; do not add or change software licenses without user direction.",
+        "Review provenance when adding external code/dependencies; old search results cannot prove all later code has no overlap.",
+        "Repository About is separate from README; update only when authorized and within scope."
+      ]
+    },
+    {
+      "id": "documentation-system",
+      "title": "資料追加・移動・対応表・保守手順",
+      "triggers": [
+        "AGENTS.md",
+        "docs/maintenance.md",
+        "docs/maintenance-map.json",
+        "tools/doc_impact.py",
+        "tests/test_doc_impact.py",
+        "docs/README.md"
+      ],
+      "authority": [
+        "docs/maintenance-map.json",
+        "AGENTS.md",
+        "tools/doc_impact.py"
+      ],
+      "review": [
+        "docs/maintenance.md",
+        "docs/README.md",
+        "docs/development.md"
+      ],
+      "artifacts": [],
+      "historical": [],
+      "external": [],
+      "checks": [
+        "Add semantic groups/edges for new files instead of broad catch-all patterns that hide missing dependencies.",
+        "Validate paths, topic IDs and relevant-file coverage; exercise installer progress and another independent topic.",
+        "Keep private memory routing synchronized locally; never embed private memory or deployment paths in public map.",
+        "Inventory coverage does not prove all semantic relationships; review the map when requirements change."
+      ]
+    }
+  ]
+}
