@@ -32,6 +32,8 @@ lua -e 'local DNSINSTALL_BOOT="yes";local r=rt.httprequest({url="https://raw.git
 
 *管理者モードでの入力例（画面イメージ）。*
 
+お使いの機種での[動作報告](https://github.com/Yamar50/rtx-dns-tcp-lua/issues/new?template=02-device-report.yml)をいただけたら嬉しいです。
+
 ## rtx-dns.luaでできるようになること
 
 **YAMAHAルーターをDNSサーバーとして使ったまま、UDPでは収まらない大きなDNS応答も受け取れるようになります。** クライアント側のDNS設定を変える必要はありません。
