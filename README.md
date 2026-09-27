@@ -24,6 +24,8 @@ lua -e 'local DNSINSTALL_BOOT="yes";local r=rt.httprequest({url="https://raw.git
 
 [インストール完了の確認方法](docs/installer.md#webguiからインストールする場合)
 
+[アンインストール方法](docs/uninstall.md)
+
 ### 方法2：コンソールから実行
 
 コンソールで `administrator` を入力して管理者モードに入ります。上記コマンドをコピーしてコマンドラインに貼り付け、ENTERを押してください。
@@ -33,6 +35,8 @@ lua -e 'local DNSINSTALL_BOOT="yes";local r=rt.httprequest({url="https://raw.git
 *管理者モードでの入力例（画面イメージ）。*
 
 お使いの機種での[動作報告](https://github.com/Yamar50/rtx-dns-tcp-lua/issues/new?template=02-device-report.yml)をいただけたら嬉しいです。
+
+[アンインストール方法](docs/uninstall.md)
 
 ## rtx-dns.luaでできるようになること
 
