@@ -28,6 +28,7 @@ lua tests/test_auto_config.lua
 lua tests/test_nvr_compat.lua
 lua tests/test_policy_wire.lua
 lua tests/test_main.lua
+lua tests/test_config_reload.lua
 lua tests/test_relay.lua
 lua tests/cache_memory.lua
 python3 -m unittest discover -s tests -p 'test_*.py'
@@ -38,7 +39,7 @@ python3 tools/build.py --config config/release.lua --output build/release/rtx-dn
 
 ## ファイル構成
 
-- `src/`：DNS wire処理、キャッシュ、DNS選択規則、TCPリレー、起動処理。
+- `src/`：DNS wire処理、キャッシュ、DNS選択規則、TCPリレー、起動・設定再読込処理。
 - `config/release.lua`：転送・起動だけで利用する配布版の自動設定プロファイル。
 - `config/example.lua`：開発・検証専用のループバック限定・120秒の手動設定。
 - `tools/build.py`：単一Luaファイルへの結合。
@@ -57,7 +58,8 @@ python3 tools/build.py --config config/release.lua --output build/release/rtx-dn
 | `max_clients_per_ip` | 同じ送信元IPからのTCP接続上限。既定4、設定範囲1〜32。全体の上限32とは別に適用 |
 | `query_rate_per_ip`, `query_burst_per_ip` | IP単位の問い合わせ枠の毎秒補充数と最大蓄積数。既定20件/秒・40件、設定範囲はそれぞれ1〜1000。全接続で共有し、切断しても枠を保持 |
 | `max_client_ips` | 送信元の管理表の上限。既定256、`max_clients`以上4096以下。接続中・利用枠が未回復のIPは追い出さない |
-| `auto_config` | `true`なら起動時にYAMAHAルーターのDNSアクセス許可・ローカル登録名を読み取り、TCP/53で開始。配布版で使用 |
+| `auto_config` | `true`ならYAMAHAルーターのDNSアクセス許可・ローカル登録名を読み取り、TCP/53で開始。配布版で使用 |
+| `config_reload_interval` | 自動設定時のconfig確認間隔。整数1〜3600秒。v1.0.0配布版は30秒。省略した試験版ではconfigを自動再読込しない。`dns_config="static"`や明示した`dns_policy`とは併用不可 |
 | `listen_host`, `listen_port` | YAMAHAルーター側の待受IPv4アドレス・ポート。試験は53053、内蔵UDP DNSをTCPで補完するときは53 |
 | `allowed_clients` | 利用を許可するIPv4アドレス・IP範囲・CIDRの配列。自動設定を使わない場合に明示必須 |
 | `dns_config` | 通常は指定不要。試験用に`"static"`を指定した場合だけ稼働中configの自動読込を省略する。旧`"running"`指定も互換として受け付ける |
@@ -127,6 +129,8 @@ schedule at 10 startup * lua /lua/rtx-dns.lua
 save
 ```
 
-DNS設定を変更した場合は、`show status lua`で対象のタスクIDを確認し、`terminate lua <ID>`で停止してから再実行します。スクリプトだけの再起動でDNS設定を読み直せるため、YAMAHAルーター本体の再起動は必須ではありません。起動スケジュールを登録済みの場合は、設定を`save`してYAMAHAルーター本体を再起動しても反映されます。停止せずに重複起動しないでください。ログは`show log reverse`で`DNSRELAY`を確認します。
+v1.0.0の配布プロファイルはDNS関連の設定変更を約30秒ごとに自動反映します。[設定再読込の仕様](config-reload.md)を参照してください。
+
+この節のように自動再読込を有効にしていない試験版では、読み取るルーター設定を変更した後に再起動します。また、Luaファイル内の設定やコードを変更した場合は、配布版でもファイルの再読込が必要です。`show status lua running`で対象のタスクIDを確認し、`terminate lua <ID>`で停止してから再実行します。YAMAHAルーター本体の再起動は必須ではありません。停止せずに重複起動しないでください。ログは`show log reverse`で`DNSRELAY`・`DNSRELOAD`を確認します。
 
 常設を解除する場合は、登録した番号の`no schedule at 10`と`save`を実行し、対象タスクを停止します。[起動スケジュールの公式仕様](https://www.rtpro.yamaha.co.jp/RT/manual/rt-common/schedule/schedule_at.html)

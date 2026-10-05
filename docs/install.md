@@ -8,37 +8,37 @@
 
 このページは、配布ファイルの手動転送と、導入後の更新・再起動を説明します。[オンラインインストール](../README.md)を使う場合、初回のファイル転送は不要です。
 
-この手順はv0.9.9の共通ファイルを対象とします。機種ごとの最低ファームウェアと確認状況は[対応機種の管理表](compatibility.md)を参照してください。
+この手順はv1.0.0の共通ファイルを対象とします。機種ごとの最低ファームウェアと確認状況は[対応機種の管理表](compatibility.md)を参照してください。
 
 ## ビルド済みファイル
 
-GitHubの[v0.9.9 Release](https://github.com/Yamar50/rtx-dns-tcp-lua/releases/tag/v0.9.9)のAssetsから`rtx-dns.lua`をダウンロードします。1本のLuaファイルに必要な本体と自動設定処理を含み、追加ライブラリ・Python・手編集は不要です。
+GitHubの[v1.0.0 Release](https://github.com/Yamar50/rtx-dns-tcp-lua/releases/tag/v1.0.0)から[rtx-dns.lua](https://github.com/Yamar50/rtx-dns-tcp-lua/releases/download/v1.0.0/rtx-dns.lua)と[SHA256SUMS](https://github.com/Yamar50/rtx-dns-tcp-lua/releases/download/v1.0.0/SHA256SUMS)をダウンロードします。1本のLuaファイルに必要な本体と自動設定処理を含み、追加ライブラリ・Python・手編集は不要です。
 
 配布版は起動時にYAMAHAルーターのconfigを読み、TCP/53で待ち受けます。
 
-- 上流DNS：`dns server select`を番号順で評価。v0.9.9ではIPv6のみで利用できない規則を除外し、条件に合う後続select、次に通常DNSのIPv4を使います。通常DNSは固定の`dns server`、`dns server pp`、NVRの`dns server pdp`、`dns server dhcp`の優先順です。PDP取得は未対応で、PP未取得やPDP未対応を理由に下位DHCPへ切り替えません。
-- アクセス許可：`dns host`の単一IP・IP範囲・対応インターフェースのネットワークを使用。`any`または省略時はYAMAHAルーターの既定値どおり全ホストを許可。`none`なら起動しません。
+- 上流DNS：`dns server select`を番号順で評価。IPv6のみで利用できない規則を除外し、条件に合う後続select、次に通常DNSのIPv4を使います。通常DNSは固定の`dns server`、`dns server pp`、NVRの`dns server pdp`、`dns server dhcp`の優先順です。PDP取得は未対応で、PP未取得やPDP未対応を理由に下位DHCPへ切り替えません。
+- アクセス許可：`dns host`の単一IP・IP範囲・対応インターフェースのネットワークを使用。`any`または省略時はYAMAHAルーターの既定値どおり全ホストを許可。`none`なら待受を停止します。
 - ローカル名：`ip host`・`dns static`に登録された名前を内蔵UDP DNSへ問い合わせる。個別の`local_zones`設定は不要。
 - キャッシュ：256件。実行時間の制限なし。統計は60秒間隔でsyslogへ出力。
 - 送信元IPごとの制限：TCP接続4本、平均20問い合わせ/秒・バースト40件。手編集なしで有効になり、切断・再接続でも問い合わせ枠はリセットしません。全体では32接続までです。
 
-`dns service off`、重複規則番号・入力上限超過・アクセス許可を確定できない設定では起動を中止します。固定IPv4のほか、PP・DHCPで取得したIPv4 DNSにも対応します。取得元不明や未対応上流に該当する問い合わせはSERVFAILにします。利用するDNSの設定は事前にYAMAHAルーター側で行ってください。[選択規則と例外時の動作](dns-policy.md)を参照してください。
+`dns service off`、重複規則番号・入力上限超過・アクセス許可を確定できない設定では待受を停止し、設定の復旧後に自動で再試行します。固定IPv4のほか、PP・DHCPで取得したIPv4 DNSにも対応します。取得元不明や未対応上流に該当する問い合わせはSERVFAILにします。利用するDNSの設定は事前にYAMAHAルーター側で行ってください。[選択規則と例外時の動作](dns-policy.md)を参照してください。
 
 ### `dns host lan1`と別セグメントからの利用
 
-`dns host lan1`では、LAN1のプライマリー・セカンダリーIPv4アドレスとマスクから許可範囲を作り、接続元IPを照合します。LAN1経由で到達しただけでは、範囲外の別セグメントは許可されません。別のLANも許可する場合は、YAMAHAルーターの`dns host`に対象インターフェースやIP範囲を併記します。例えばLAN1とLAN2なら`dns host lan1 lan2`です。実際の構成に合わせて設定し、変更後にスクリプトを再起動してください。
+`dns host lan1`では、LAN1のプライマリー・セカンダリーIPv4アドレスとマスクから許可範囲を作り、接続元IPを照合します。LAN1経由で到達しただけでは、範囲外の別セグメントは許可されません。別のLANも許可する場合は、YAMAHAルーターの`dns host`に対象インターフェースやIP範囲を併記します。例えばLAN1とLAN2なら`dns host lan1 lan2`です。実際の構成に合わせて設定し、変更は約30秒ごとに自動反映されます。
 
 待受はIPv4の全アドレスのTCP/53です。YAMAHAルーターのLua APIの`tcp:bind()`が指定するのはIPアドレスで、インターフェース名を指定する機能はありません。待受IPと利用端末の許可は別に扱い、許可されない接続元は問い合わせを処理せず切断します。既存のIPフィルターも適用されます。
 
-`dns host lan`にはLAN・タグVLAN・LAN分割・VLAN・bridgeを含み、WAN・ONUは含めません。直接の`dns host lanN.M`は未確認構文のため起動を中止します。[インターフェース名と用途](compatibility.md#interface-forms)を参照してください。
+`dns host lan`にはLAN・タグVLAN・LAN分割・VLAN・bridgeを含み、WAN・ONUは含めません。直接の`dns host lanN.M`は未確認構文のためTCP待受を停止し、次の設定確認で再試行します。[インターフェース名と用途](compatibility.md#interface-forms)を参照してください。
 
-現在の自動設定はconfigに記述された静的IPv4アドレスを対象とします。許可範囲に必要なインターフェースがDHCPなどで動的にアドレスを取得する構成では、範囲を推測せず起動を中止します。
+現在の自動設定はconfigに記述された静的IPv4アドレスを対象とします。許可範囲に必要なインターフェースがDHCPなどで動的にアドレスを取得する構成では、範囲を推測せずTCP待受を停止し、次の設定確認で再試行します。
 
 初めて導入する場合は以下へ進みます。既存版の更新は[設定変更と更新](#update-script)、NVR試験版からの切替は[移行手順](#nvr-migration)を先に確認してください。
 
 ## 初回インストール
 
-選んだバージョンを自動取得・SHA256照合・起動する場合は、[コマンド1行のインストーラー](installer.md)も利用できます。v0.1.4用とv0.9.9用があり、指定した版だけを取得します。手動で転送する場合は以下へ進んでください。
+選んだバージョンを自動取得・SHA256照合・起動する場合は、[コマンド1行のインストーラー](installer.md)も利用できます。v1.0.0用を使用します。指定した版だけを取得します。手動で転送する場合は以下へ進んでください。
 
 USBメモリやmicroSDカード、SFTP等でインストールします。機種が備える転送方法を使用してください。
 
@@ -76,7 +76,7 @@ show status lua
 show log
 ```
 
-`show status lua`で対象ファイルが`[running]`となり、ログに`DNSRELAY`の起動記録があることを確認します。`lua`コマンドは起動後にプロンプトを返すため、`&`は不要です。同じファイルを重複起動しないでください。
+`show status lua`で対象ファイルが`[running]`となることを確認し、下記の[動作確認](#動作確認)でDNS応答も確認します。v1.0.0は設定の復旧待ちでもタスクが稼働するため、`running`だけでDNSの応答可能な状態とは判断できません。`lua`コマンドは起動後にプロンプトを返すため、`&`は不要です。同じファイルを重複起動しないでください。
 
 ## YAMAHAルーター起動時の自動実行
 
@@ -106,7 +106,9 @@ dig @192.0.2.1 router.home.arpa A +tcp
 
 ## 設定変更と更新
 
-`dns server`、`dns server select`、`dns host`、静的ホスト名、対象インターフェースのIPなどを変更した後は、スクリプトを再起動します。設定は起動時に読み取り、稼働中には自動再読込しません。PP・DHCPで取得したDNSアドレスと必要なPP接続状態だけは30秒ごとに確認するため、同じ設定のまま取得アドレスが変わった場合の再起動は不要です。
+**v1.0.0からDNS関連の設定変更後に手動再起動する必要がなくなりました。** 約30秒ごとに現在のconfigを確認し、上流DNS、許可する端末、簡易DNS登録、対象インターフェースのIPv4設定などの変更を自動反映します。PP・DHCPで取得したDNSの変化も引き続き確認します。反映時は接続とキャッシュを破棄するため、一時的な問い合わせ失敗があり得ます。[自動再読込の動作と試験結果](config-reload.md)を参照してください。
+
+ファイルの更新や、旧版での設定変更では以下の停止・起動を行います。
 
 ```text
 terminate lua file /lua/rtx-dns.lua

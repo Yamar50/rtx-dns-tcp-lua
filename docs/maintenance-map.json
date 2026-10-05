@@ -50,6 +50,10 @@
         {
           "tag": "v0.9.9",
           "source": "docs/releases/v0.9.9.md"
+        },
+        {
+          "tag": "v1.0.0",
+          "source": "docs/releases/v1.0.0.md"
         }
       ],
       "rule": "Source Markdown is intended body. Before PATCH, compare fresh remote. After PATCH, compare exact body. Preserve flags/assets/tag/latest. Other versions are historical unless explicitly selected."
@@ -233,7 +237,10 @@
         "docs/releases/v0.9.9.md",
         "docs/README.md",
         "docs/install.md",
-        "docs/compatibility.md"
+        "docs/compatibility.md",
+        "docs/releases/v1.0.0.md",
+        "docs/releases/v1.0.0-details.md",
+        "docs/releases/history.md"
       ],
       "artifacts": [
         "docs/images/*.png",
@@ -291,7 +298,7 @@
       ],
       "external": [],
       "checks": [
-        "Config reload requires explicit script restart; periodic refresh concerns dynamic PP/DHCP state. Review this distinction whenever polling changes.",
+        "Since v1.0.0, relevant running configuration and dynamic PP/DHCP DNS state are polled every 30 seconds; preserve old-version evidence. Review this distinction whenever polling changes.",
         "Keep selection priority, source-address matching, IPv6-only fallback, unknown acquisition state, explicit refusal and AAAA filtering consistent.",
         "Reflect user-visible capability changes in selected new Release details; do not assign new behavior to old releases.",
         "When publishing changed runtime code, also select release-publication for version/build/installer/assets review."
@@ -468,7 +475,10 @@
         "docs/known-issues.md",
         "docs/README.md",
         "docs/releases/v0.1.4.md",
-        "docs/releases/v0.9.9.md"
+        "docs/releases/v0.9.9.md",
+        "docs/releases/v1.0.0.md",
+        "docs/releases/v1.0.0-details.md",
+        "docs/releases/history.md"
       ],
       "artifacts": [
         "installer/versions/*/rtx-dns.lua",
@@ -594,6 +604,55 @@
         "Validate paths, topic IDs and relevant-file coverage; exercise installer progress and another independent topic.",
         "Keep private memory routing synchronized locally; never embed private memory or deployment paths in public map.",
         "Inventory coverage does not prove all semantic relationships; review the map when requirements change."
+      ]
+    },
+    {
+      "id": "config-reload",
+      "title": "DNS設定の自動再読込と復帰・試験結果",
+      "triggers": [
+        "src/config_reload.lua",
+        "tests/test_config_reload.lua",
+        "config/release.lua",
+        "docs/config-reload.md"
+      ],
+      "authority": [
+        "src/config_reload.lua",
+        "src/main.lua",
+        "src/relay.lua",
+        "config/release.lua"
+      ],
+      "review": [
+        "README.md",
+        "docs/install.md",
+        "docs/installer.md",
+        "docs/config-reload.md",
+        "docs/dns-policy.md",
+        "docs/dns-ipv6-fallback.md",
+        "docs/technical-overview.md",
+        "docs/development.md",
+        "docs/known-issues.md",
+        "docs/compatibility.md",
+        "docs/README.md",
+        "docs/releases/v1.0.0.md",
+        "docs/releases/v1.0.0-details.md"
+      ],
+      "artifacts": [
+        "installer/versions/*/rtx-dns.lua"
+      ],
+      "historical": [
+        "docs/results/config-reload-2026-10-05.md"
+      ],
+      "external": [
+        "github_release_bodies",
+        "github_release_assets",
+        "repository_mirrors"
+      ],
+      "checks": [
+        "The public release profile enables 30-second config reload; old dated releases retain restart-required behavior.",
+        "Unchanged relevant configuration preserves cache/connections; changed or unreadable configuration closes old sockets/cache before reinitializing.",
+        "Distinguish intended suspension during DNS off/ACL denial from unexpected failure; report actual trial duration, version/hash and restoration evidence.",
+        "Installer task-liveness is not proof that the DNS listener is ready.",
+        "Do not publish private telemetry profiles, host identifiers or credentials."
       ]
     }
   ]

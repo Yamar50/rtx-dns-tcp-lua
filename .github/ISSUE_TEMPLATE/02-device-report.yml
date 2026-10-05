@@ -29,7 +29,7 @@ body:
     attributes:
       label: スクリプトの版
       description: 独自の修正を加えている場合は、そのこともお知らせください。
-      placeholder: 例：v0.9.9、v0.1.4、不明
+      placeholder: 例：v1.0.0、v0.9.9、不明
     validations:
       required: true
   - type: textarea
