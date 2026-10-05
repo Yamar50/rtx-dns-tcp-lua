@@ -204,6 +204,12 @@ function Relay.new(config, socket_api, logfn, wire, cache)
   local ok
   ok, err = call(listener, "settimeout", 0)
   if not ok then close(listener); error("listener timeout: " .. tostring(err)) end
+  if cfg.config_reload_interval ~= nil then
+    -- Rebinding after closing active sessions can otherwise fail while the
+    -- previous TCP generation remains in TIME_WAIT. Reload profiles enable it.
+    ok, err = call(listener, "setoption", "reuseaddr", true)
+    if not ok then close(listener); error("listener reuseaddr: " .. tostring(err)) end
+  end
   ok, err = call(listener, "bind", cfg.listen_host, cfg.listen_port)
   if not ok then close(listener); error("listener bind: " .. tostring(err)) end
   ok, err = call(listener, "listen", cfg.backlog)
@@ -963,6 +969,7 @@ end
 function Relay:step()
   if self.stopped then return false end
   self.now = self:_clock()
+  if not self:_control_check() then return nil, "config_reload" end
   self:_timers()
   for _, client in pairs(self.clients) do self:_client_frames(client) end
   for _, ep in ipairs(self.endpoints) do if ep.state == "ready" then self:_upstream_frames(ep) end end
@@ -991,6 +998,9 @@ function Relay:step()
   end
   local ok, readable, writable, err = pcall(self.api.select, readers, writers, self.cfg.select_timeout)
   self.now = self:_clock()
+  -- A changed ACL must close existing sessions before processing readiness
+  -- collected under the previous configuration.
+  if not self:_control_check() then return nil, "config_reload" end
   if not ok or (not readable and err ~= "timeout") then
     self:_inc("select_errors")
     self:_event("select", "select failed: " .. tostring(ok and err or readable))
@@ -1022,6 +1032,18 @@ function Relay:step()
   end
   self:_timers()
   self:_schedule()
+  return true
+end
+
+function Relay:_control_check()
+  if not self.cfg.control_check then return true end
+  local ok, changed = pcall(self.cfg.control_check, self)
+  self.now = self:_clock()
+  if not ok or changed then
+    self:close()
+    if self.cache then self.cache:clear() end
+    return false
+  end
   return true
 end
 

@@ -19,6 +19,7 @@ test:
 	$(LUA) tests/test_nvr_compat.lua
 	$(LUA) tests/test_policy_wire.lua
 	$(LUA) tests/test_main.lua
+	$(LUA) tests/test_config_reload.lua
 	$(LUA) tests/test_relay.lua
 	$(LUA) tests/cache_memory.lua
 	$(PYTHON) -m unittest discover -s tests -p 'test_*.py'

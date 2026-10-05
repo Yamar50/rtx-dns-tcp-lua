@@ -32,7 +32,7 @@ local function service_mode(text)
   return mode, nil, aaaa_filter
 end
 
-function M.read_policy(config, runtime)
+function M.read_policy(config, runtime, snapshot)
   if config.auto_config ~= nil and type(config.auto_config) ~= "boolean" then
     return nil, "auto_config must be boolean"
   end
@@ -47,9 +47,13 @@ function M.read_policy(config, runtime)
   if config.dns_policy then return config.dns_policy end
   if config.dns_config == "static" then return nil end
   if type(runtime.command) ~= "function" then return nil, "runtime.command is required for running DNS config" end
-  local ok, success, text = pcall(runtime.command, "show config")
-  if not ok or not success or type(text) ~= "string" then
-    return nil, "cannot read running DNS configuration"
+  local text = snapshot
+  if text == nil then
+    local ok, success
+    ok, success, text = pcall(runtime.command, "show config")
+    if not ok or not success or type(text) ~= "string" then
+      return nil, "cannot read running DNS configuration"
+    end
   end
   if #text > 1048576 then return nil, "DNS policy configuration size limit" end
   local service, service_error, aaaa_filter = service_mode(text)
@@ -79,12 +83,8 @@ function M.read_policy(config, runtime)
   return policy, nil, automatic, refresh
 end
 
-function M.start(config, runtime)
-  assert(runtime and runtime.socket, "Yamaha rt.socket runtime is required")
-  local wire = require("dns_wire")
-  local Cache = require("cache")
-  local Relay = require("relay")
-  local function log(message)
+local function logger(config, runtime)
+  return function(message)
     if config.console_log ~= false then pcall(print, message) end
     if config.syslog ~= false and type(runtime.syslog) == "function" then
       -- Yamaha limits each SYSLOG message to 231 bytes. Preserve the whole
@@ -97,7 +97,13 @@ function M.start(config, runtime)
       until first > #message
     end
   end
-  local policy, policy_error, automatic, refresh = M.read_policy(config, runtime)
+end
+
+local function start_once(config, runtime, snapshot, control, log)
+  local wire = require("dns_wire")
+  local Cache = require("cache")
+  local Relay = require("relay")
+  local policy, policy_error, automatic, refresh = M.read_policy(config, runtime, snapshot)
   if policy_error then
     log("DNSRELAY startup failed " .. policy_error)
     error(policy_error)
@@ -113,6 +119,7 @@ function M.start(config, runtime)
   end
   config.dns_policy = policy
   config.policy_refresh = refresh or config.policy_refresh
+  config.control_check = control and control.check or nil
   if policy then
     log("DNSRELAY running DNS policy loaded routes=" .. #policy.routes)
     for _, route in ipairs(policy.routes) do
@@ -138,7 +145,10 @@ function M.start(config, runtime)
     log("DNSRELAY startup failed " .. tostring(relay))
     error(relay)
   end
-  local ok, result, reason = pcall(function() return relay:run(config.duration) end)
+  local ok, result, reason = pcall(function()
+    if control then control.ready() end
+    return relay:run(config.duration)
+  end)
   relay:close()
   if not ok then
     log("DNSRELAY fatal " .. tostring(result))
@@ -153,6 +163,20 @@ function M.start(config, runtime)
   end
   table.sort(fields)
   log("DNSRELAY stopped " .. table.concat(fields, " ") .. " reason=" .. tostring(reason or "duration"))
-  return result
+  return result, reason
+end
+
+function M.start(config, runtime)
+  assert(runtime and runtime.socket, "Yamaha rt.socket runtime is required")
+  local log = logger(config, runtime)
+  if config.config_reload_interval ~= nil then
+    return require("config_reload").run(config, runtime, function(snapshot, control, duration)
+      local profile = {}
+      for key, value in pairs(config) do profile[key] = value end
+      profile.duration = duration
+      return start_once(profile, runtime, snapshot, control, log)
+    end, log)
+  end
+  return start_once(config, runtime, nil, nil, log)
 end
 return M
