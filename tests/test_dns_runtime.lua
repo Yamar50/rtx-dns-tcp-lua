@@ -104,6 +104,57 @@ for _, entry in ipairs({{jp_up, "up"}, {sj_up, "up"}, {jp_down, "down"}, {sj_dow
     reader:refresh(); equal(reader:pp_state(1), entry[2])
 end
 
+-- Native console character en.ascii wording reported on RTX1300
+-- Rev.23.00.20 and measured with rt.command on RTX830 Rev.15.02.33.
+-- Identifiers/addresses below are synthetic.
+local ascii_pp = [[PP[01]:
+Description:
+Current PPPoE session status is Connected.
+Access Concentrator: test-ac
+1 day 2 hours 3 minutes 4 seconds  connection.
+Maximum Transmission Unit(MTU):
+  IPv4: 1454 octets
+  IPv6: 1500 octets
+PPP Configure Options
+    LCP Local: Magic-Number MRU, Remote: CHAP Magic-Number MRU
+    IPCP Local: IP-Address Primary-DNS(192.0.2.53) Secondary-DNS(192.0.2.54), Remote: IP-Address
+    PP IP Address Local: 192.0.2.10, Remote: 192.0.2.1
+    CCP: None
+]]
+local ascii_responses = {['show status pp 1'] = ascii_pp}
+local ascii_reader = new("dns server select 2 pp 1 any . restrict pp 1", ascii_responses)
+for _, body in ipairs({ascii_pp, (ascii_pp:gsub("\n", "\r\n"))}) do
+    ascii_responses['show status pp 1'] = body
+    ascii_reader:refresh()
+    equal(ascii_reader:pp_state(1), "up")
+    source(ascii_reader, "pp", 1, "present", {"192.0.2.53", "192.0.2.54"})
+end
+-- A redacted report still establishes PP state; '*' is not a usable DNS IP.
+ascii_responses['show status pp 1'] = ascii_pp:gsub("192%.0%.2%.5[34]", "*")
+ascii_reader:refresh(); equal(ascii_reader:pp_state(1), "up")
+source(ascii_reader, "pp", 1, "unknown")
+-- Do not infer UP from a substring or from an unrelated protocol/description.
+for _, text in ipairs({
+    "Current PPPoE session status is Not connected.",
+    "Current PPPoE session status is Disconnected.",
+    "Current PPPoE session status is In connecting process.",
+    "Current BGP session status is Connected.",
+    "Description: Current PPPoE session status is Connected."
+}) do
+    ascii_responses['show status pp 1'] = ascii_pp:gsub("Current PPPoE session status is Connected%.", text)
+    ascii_reader:refresh(); equal(ascii_reader:pp_state(1), "unknown")
+    source(ascii_reader, "pp", 1, "unknown")
+end
+for _, body in ipairs({
+    ascii_pp .. "PPPoE session is not connected.\n",
+    ascii_pp .. "PP[01]:\n",
+    (ascii_pp:gsub("PP%[01%]:", "PP[02]:"))
+}) do
+    ascii_responses['show status pp 1'] = body
+    ascii_reader:refresh(); equal(ascii_reader:pp_state(1), "unknown")
+    source(ascii_reader, "pp", 1, "unknown")
+end
+
 -- IPv4 common DNS can belong to one configured and observed interface only.
 local responses = {['show status dhcpc'] = dhcp("LAN3", nil, {"198.51.100.1", "198.51.100.2"}, true)}
 reader, calls = new("ip lan3 address dhcp\ndns server select 10 dhcp lan3 any .", responses)

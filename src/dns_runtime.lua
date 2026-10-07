@@ -110,7 +110,8 @@ for _, value in ipairs({"none", "not assigned", "not acquired", "unassigned", "r
     "\150\162\144\221\146\232"}) do missing[compact(value)] = true end
 local connected = {"PPPoE\227\130\187\227\131\131\227\130\183\227\131\167\227\131\179\227\129\175\230\142\165\231\182\154\227\129\149\227\130\140\227\129\166\227\129\132\227\129\190\227\129\153",
     "PPPoE\131\090\131\098\131\086\131\135\131\147\130\205\144\218\145\177\130\179\130\234\130\196\130\162\130\220\130\183",
-    "PPPoE session is connected", "PP is connected"}
+    "PPPoE session is connected", "PP is connected",
+    "Current PPPoE session status is Connected"}
 local disconnected = {"PPPoE\227\130\187\227\131\131\227\130\183\227\131\167\227\131\179\227\129\175\230\142\165\231\182\154\227\129\149\227\130\140\227\129\166\227\129\132\227\129\190\227\129\155\227\130\147",
     "PPPoE\131\090\131\098\131\086\131\135\131\147\130\205\144\218\145\177\130\179\130\234\130\196\130\162\130\220\130\185\130\241",
     "PPPoE session is disconnected", "PPPoE session is not connected", "PP is disconnected", "PP is not connected"}
