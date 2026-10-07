@@ -137,7 +137,6 @@ source(ascii_reader, "pp", 1, "unknown")
 for _, text in ipairs({
     "Current PPPoE session status is Not connected.",
     "Current PPPoE session status is Disconnected.",
-    "Current PPPoE session status is In connecting process.",
     "Current BGP session status is Connected.",
     "Description: Current PPPoE session status is Connected."
 }) do
@@ -154,6 +153,25 @@ for _, body in ipairs({
     ascii_reader:refresh(); equal(ascii_reader:pp_state(1), "unknown")
     source(ascii_reader, "pp", 1, "unknown")
 end
+
+-- Observed native states, and history must never override current status.
+for _, entry in ipairs({
+    {"Current line status is disabled.", "down", "absent"},
+    {"Current PPPoE session status is disabled.", "down", "absent"},
+    {"Current PPPoE session status is Offline, never connected.", "down", "absent"},
+    {"Current PPPoE session status is Offline.", "down", "absent"},
+    {"Current PPPoE session status is In connecting process.", "connecting", "unknown"}
+}) do
+    ascii_responses['show status pp 1'] = "PP[01]:\n" .. entry[1]
+        .. "\nLast PPPoE session status:\nCurrent PPPoE session status is Connected.\n"
+        .. "IPCP Local: Primary-DNS(192.0.2.53), Remote: IP-Address\n"
+    ascii_reader:refresh()
+    equal(ascii_reader:pp_state(1), entry[2]); source(ascii_reader, "pp", 1, entry[3])
+end
+-- Even a valid connected phrase outside the target PP block is not evidence.
+ascii_responses['show status pp 1'] = "Current PPPoE session status is Connected.\nPP[01]:\n"
+    .. "IPCP Local: Primary-DNS(192.0.2.53), Remote: IP-Address\n"
+ascii_reader:refresh(); equal(ascii_reader:pp_state(1), "unknown")
 
 -- IPv4 common DNS can belong to one configured and observed interface only.
 local responses = {['show status dhcpc'] = dhcp("LAN3", nil, {"198.51.100.1", "198.51.100.2"}, true)}

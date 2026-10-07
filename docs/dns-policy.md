@@ -4,7 +4,7 @@
 
 [インストールと機能](../README.md) · [技術資料一覧](README.md)
 
-このページはv1.0.0の実装を説明します。v0.9.9の[IPv6のみの規則を除外して後続select・通常DNSのIPv4を使う処理](dns-ipv6-fallback.md)とインターフェース名の共通解析を引き継ぎ、[DNS設定の自動再読込](config-reload.md)を追加しています。
+このページは開発中のv1.0.1の実装を説明します（未公開）。公開済みv1.0.0の配布物は変更していません。v0.9.9の[IPv6のみの規則を除外して後続select・通常DNSのIPv4を使う処理](dns-ipv6-fallback.md)とインターフェース名の共通解析、およびv1.0.0の[DNS設定の自動再読込](config-reload.md)を引き継いでいます。
 
 | 設定・状態 | 動作 |
 |---|---|
@@ -25,16 +25,37 @@
 
 ## DNS未取得と代替IP
 
-PP/DHCPのDNSが明確に未取得で、select行に代替IPがあれば、そのIPを使います。マニュアルの`default-server`は引数名であり、コマンドに書くキーワードではありません。例:
+`show status pp N`の現在の状態と`IPCP Local`を解析します。`Primary-DNS(...)`・`Secondary-DNS(...)`が通知されていればそのアドレスを使います。英語・CP932の実測表示とUTF-8の互換入力に対応し、過去の接続履歴を現在の状態として読みません。
+
+| 選択した取得元の状態 | v1.0.1の動作 |
+|---|---|
+| PP接続中・通知DNSあり | 通知DNSを使う |
+| PP切断／無効・`restrict pp N`の条件不一致 | 次のselect規則を評価する |
+| PP切断／無効・`restrict`なし | 選択を維持し、宛先がなければSERVFAIL |
+| PP接続処理中、状態不明、IPCP欄の欠損・矛盾 | 必要な状態を確定できない問い合わせはSERVFAIL |
+| PP接続中・完全なIPCP欄に通知DNSなし | 通常の固定`dns server`のIPv4へ直接切替。後続selectは調べず、利用できなければSERVFAIL。下記のEDE注記を追加する |
+| DHCPのIPリースなし、または1取得元の共通情報からDNS通知なしを確認 | 行内代替IPより通常DNSを使用する。後続selectは再検索しない |
+| DHCP取得元・状態を特定できない | 該当する問い合わせはSERVFAIL。推測で別のDNSへ送らない |
+
+行内代替IPは、`dns server select 10 pp 1 192.0.2.53 any .`の`192.0.2.53`です。公式の`default-server`は引数名で、コマンドに書くキーワードではありません。内蔵DNSは接続時に有効だったPPの行内代替IPを保持することがありますが、現在のconfigや`show status pp`には保持先が出ません。そのため、通知DNSがない場合に現在の行内IPを有効な宛先と推測することをやめ、通常固定DNSを使う例外を追加しました。[内蔵DNSとの比較と仕様](dns-select-native-compatibility.md)
+
+この例外は「通知DNSなし」を確認できたPP接続中だけに適用します。通信障害、解析不能、DHCP取得元不明、明示拒否には適用しません。選択したIPv4 DNSがSERVFAIL・無応答・TCP非対応でも、別の規則や通常DNSへ問い合わせ直しません。LuaがPPの接続・切断を操作することもありません。
+
+DHCPのIPリースあり・共通情報あり・DNS通知なしはRTX1210の1取得元で実測しました。複数IFへの取得DNSの対応付け、共通情報の省略、他機種・他IF形式には未確認の範囲があります。[対応範囲と残る制約](known-issues.md)を参照してください。
+
+### PPの代替経路を使った応答の注記
+
+通常固定DNSへ切り替えた理由を、EDNS付き要求への応答にEDE（オプション15、情報コード0）として付加します。
 
 ```text
-dns server select 10 pp 1 edns=on 192.0.2.53 edns=off any example.test
-dns server select 20 dhcp lan2 edns=on 192.0.2.54 edns=on any .
+rtx-dns: select:2 PP DNS destination unavailable; used configured dns server; answer may differ.
 ```
 
-代替IPがない場合、DHCP未取得は通常のDNS設定で解決し、PP未取得はSERVFAILです。LuaがPPの接続・切断を操作することはありません。取得元不明、状態取得失敗、IPv6のみの取得は「未取得」と区別し、代替IPへ逃がしません。通信失敗時の再試行は選択した規則内だけで行います。
+規則2（`dns server select 2`）の例です。NOERROR・NXDOMAIN等のRCODEや回答は保持します。固定DNSでも応答を取得できない場合は、失敗を説明するEDE付きSERVFAILになります。ブラウザーに警告を出す機能ではなく、EDE表示に対応する`dig`等で調べるための情報です。
 
-RTX1210 Rev.14.01.42の内蔵DNSでは、DHCP未取得時に行内の代替IPより通常の固定DNSを使うケースを確認しました。**現行v1.0.0**は、その挙動を再現せず、公式マニュアルの明示的な代替IPを使用する仕様です。2026-10-07の[追加比較](results/native-select-2026-10-07.md)を踏まえ、今後は明記した例外を除き内蔵DNSに合わせる方針です。v1.0.1の計画には、既存のIPv6例外に加え、PPの保持中代替DNSを特定できない場合に通常の固定DNSを使い、EDEで理由を注記する例外を追加しました。v1.0.0の動作は変更しておらず、追加機能の実装・試験は未完了です。[互換性と修正計画](dns-select-native-compatibility.md)
+クライアントがEDNSを使っていない、追加後に65,535バイトを超える、既存OPTが末尾にない等の場合は注記を省略して回答を優先します。上流の`edns=off`とクライアントのEDNSは別に扱います。省略時を含め、経路ごとに頻度を制限したログを残します。IPアドレス・問い合わせ名・認証情報は注記に含めません。
+
+キャッシュには注記を付ける前の回答を保存し、応答時にその要求と選択経路に合わせて注記します。PPの通知DNSが戻る等、選択状態が変わった場合は既存のキャッシュ・接続を破棄します。[EDEの根拠：RFC 8914](https://www.rfc-editor.org/rfc/rfc8914.html#section-2)
 
 ## 未対応設定の扱い
 

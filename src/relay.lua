@@ -240,7 +240,7 @@ function Relay:_load_routes()
     -- Copy route metadata so an in-flight query's namespace and allowed peers
     -- cannot change if the caller later modifies its configuration table.
     local state = { policy_id = route.policy_id .. ":generation:" .. self.generation,
-      event_id = route.policy_id, reason = route.reason,
+      event_id = route.policy_id, reason = route.reason, ede_text = route.ede_text,
       reject = route.reject, unavailable = route.unavailable, entries = {} }
     local route_peers = {}
     for _, upstream in ipairs(route.upstreams) do
@@ -379,11 +379,24 @@ function Relay:_reply(client, raw)
   client.last_activity = now
 end
 
-function Relay:_finish(job, raw, cache_response)
+function Relay:_annotate(raw, query, route, failure)
+  if not route or not route.ede_text then return raw end
+  self:_inc("pp_default_fallback_replies")
+  local text = failure and ("rtx-dns: " .. route.event_id ..
+    " PP DNS destination unavailable; configured dns server fallback failed.") or route.ede_text
+  local result, omitted = raw, "EDE API unavailable"
+  if self.wire.annotate_response then result, omitted = self.wire.annotate_response(raw, query, text) end
+  if omitted then self:_inc("ede_omitted") else self:_inc("ede_added") end
+  self:_event("pp_default_" .. route.event_id, text .. (omitted and " EDE omitted: " .. omitted or ""))
+  return result
+end
+
+function Relay:_finish(job, raw, cache_response, failure)
   if not self.jobs[job.serial] then return end
   if cache_response and self.cache and job.generation == self.generation then
     self.cache:put(job.query, job.policy_id, raw, self.now)
   end
+  raw = self:_annotate(raw, job.query, job.route, failure)
   self:_remove_job(job)
   self:_reply(job.client, raw)
   self:_inc("responses")
@@ -392,7 +405,7 @@ end
 function Relay:_fail(job, reason)
   self:_inc("servfail")
   self:_inc("failure_" .. reason)
-  self:_finish(job, self.wire.error_response(job.query, 2), false)
+  self:_finish(job, self.wire.error_response(job.query, 2), false, true)
 end
 
 function Relay:_close_client(client)
@@ -625,14 +638,14 @@ function Relay:_query(client, raw)
         .. tostring(route and route.reason or "no matching route"))
       self:_inc("policy_unmatched")
       self:_inc("servfail")
-      self:_reply(client, self.wire.error_response(query, 2))
+      self:_reply(client, self:_annotate(self.wire.error_response(query, 2), query, route, true))
       return
     end
     query.cache_allow_no_opt = true
   end
   if not is_local and self.cache then
     local hit = self.cache:get(query, route.policy_id, self.now)
-    if hit then self:_inc("cache_hits"); self:_reply(client, hit); return end
+    if hit then self:_inc("cache_hits"); self:_reply(client, self:_annotate(hit, query, route)); return end
     self:_inc("cache_misses")
   end
   if self.pending >= self.cfg.max_pending then

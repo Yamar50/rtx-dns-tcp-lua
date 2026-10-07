@@ -98,7 +98,8 @@ responses["show status dhcpc"] = dhcp("ONU1", {})
 runtime:refresh(); source(runtime, "onu1", "absent")
 policy:refresh(runtime)
 check(selected(policy).unavailable)
-equal(host(policy, "onu.example"), "203.0.113.53")
+check(selected(policy, "onu.example").unavailable,
+    "confirmed IPv4 DHCP DNS absence uses ordinary DNS, which is also absent here")
 for _, bad in ipairs({false, dhcp("LAN1", {"198.51.100.53"}), dhcp("ONU2", {"198.51.100.53"})}) do
     responses["show status dhcpc"] = bad
     runtime:refresh(); source(runtime, "onu1", "unknown")
