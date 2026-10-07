@@ -303,7 +303,7 @@
         "Keep selection priority, source-address matching, IPv6-only fallback, unknown acquisition state, explicit refusal and AAAA filtering consistent.",
         "Reflect user-visible capability changes in selected new Release details; do not assign new behavior to old releases.",
         "When publishing changed runtime code, also select release-publication for version/build/installer/assets review.",
-        "Except the documented IPv6-only extension, align select evaluation with native DNS. Consult native-select-compatibility before changing PP/DHCP acquisition, restrict or failure fallback; do not treat unknown or link-down as automatic rule mismatch."
+        "Except documented extensions, align select evaluation with native DNS. Consult native-select-compatibility before changing PP/DHCP acquisition, restrict or fallback. Planned v1.0.1 R10/R11 is a narrow unresolved retained PP-default -> configured fixed DNS + EDE exception, not generic unknown-state or upstream-failure fallback; it is not v1.0.0 behavior."
       ]
     },
     {
@@ -673,7 +673,9 @@
         "docs/dns-select-native-compatibility.md",
         "src/dns_runtime.lua",
         "src/dns_policy.lua",
-        "src/relay.lua"
+        "src/relay.lua",
+        "src/dns_wire.lua",
+        "src/cache.lua"
       ],
       "review": [
         "docs/dns-policy.md",
@@ -690,7 +692,7 @@
       ],
       "external": [],
       "checks": [
-        "Only confirmed IPv6-only routes receive the established cross-rule extension. Separate restrict mismatch, acquired-source absence, ambiguous status and upstream response failure.",
+        "Preserve the established IPv6-only extension and separately review planned R10/R11 retained PP-default fallback. Separate restrict mismatch, acquired-source absence, unreadable status and upstream response failure; do not broaden the exception. EDE must respect client EDNS, wire size, response RCODE, route-specific cache provenance and bounded logging.",
         "Preserve model/firmware, PPTP vs PPPoE, native UDP measurements vs offline Lua replay, and uncompleted cases. Never generalize inline default behavior from one acquisition state.",
         "Track U01-U05 and state-specific acceptance criteria; unresolved source mapping and parser states are compatibility gaps, not completed native parity.",
         "Maintain the dated evidence, current-behavior docs and future plan separately. Source changes require new live comparisons and release-publication review."
