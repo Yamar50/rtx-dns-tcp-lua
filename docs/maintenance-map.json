@@ -286,7 +286,8 @@
         "docs/technical-overview.md",
         "docs/install.md",
         "docs/development.md",
-        "docs/known-issues.md"
+        "docs/known-issues.md",
+        "docs/dns-select-native-compatibility.md"
       ],
       "artifacts": [],
       "historical": [
@@ -301,7 +302,8 @@
         "Since v1.0.0, relevant running configuration and dynamic PP/DHCP DNS state are polled every 30 seconds; preserve old-version evidence. Review this distinction whenever polling changes.",
         "Keep selection priority, source-address matching, IPv6-only fallback, unknown acquisition state, explicit refusal and AAAA filtering consistent.",
         "Reflect user-visible capability changes in selected new Release details; do not assign new behavior to old releases.",
-        "When publishing changed runtime code, also select release-publication for version/build/installer/assets review."
+        "When publishing changed runtime code, also select release-publication for version/build/installer/assets review.",
+        "Except the documented IPv6-only extension, align select evaluation with native DNS. Consult native-select-compatibility before changing PP/DHCP acquisition, restrict or failure fallback; do not treat unknown or link-down as automatic rule mismatch."
       ]
     },
     {
@@ -653,6 +655,43 @@
         "Distinguish intended suspension during DNS off/ACL denial from unexpected failure; report actual trial duration, version/hash and restoration evidence.",
         "Installer task-liveness is not proof that the DNS listener is ready.",
         "Do not publish private telemetry profiles, host identifiers or credentials."
+      ]
+    },
+    {
+      "id": "native-select-compatibility",
+      "title": "内蔵DNSとのselect互換性・状態別比較と未確定事項",
+      "triggers": [
+        "docs/dns-select-native-compatibility.md",
+        "src/dns_runtime.lua",
+        "src/dns_policy.lua",
+        "tests/test_dns_runtime.lua",
+        "tests/test_dns_policy.lua",
+        "tests/test_dynamic_policy.lua",
+        "tests/test_ipv6_fallback.lua"
+      ],
+      "authority": [
+        "docs/dns-select-native-compatibility.md",
+        "src/dns_runtime.lua",
+        "src/dns_policy.lua",
+        "src/relay.lua"
+      ],
+      "review": [
+        "docs/dns-policy.md",
+        "docs/dns-ipv6-fallback.md",
+        "docs/known-issues.md",
+        "docs/config-reload.md",
+        "docs/README.md"
+      ],
+      "artifacts": [],
+      "historical": [
+        "docs/results/native-select-2026-10-07.md"
+      ],
+      "external": [],
+      "checks": [
+        "Only confirmed IPv6-only routes receive the established cross-rule extension. Separate restrict mismatch, acquired-source absence, ambiguous status and upstream response failure.",
+        "Preserve model/firmware, PPTP vs PPPoE, native UDP measurements vs offline Lua replay, and uncompleted cases. Never generalize inline default behavior from one acquisition state.",
+        "Track U01-U05 and state-specific acceptance criteria; unresolved source mapping and parser states are compatibility gaps, not completed native parity.",
+        "Maintain the dated evidence, current-behavior docs and future plan separately. Source changes require new live comparisons and release-publication review."
       ]
     }
   ]
