@@ -21,7 +21,7 @@
 | 性能の目安、接続数・キャッシュ、設定の読取り、制限 | [技術概要](technical-overview.md) |
 | 機種、最低ファームウェア、動作報告、インターフェース名 | [対応機種と実行環境](compatibility.md) |
 | `dns server select`・PP・DHCPの選択順と状態更新 | [DNS設定の選択と定期更新](dns-policy.md) |
-| 内蔵DNSと選択動作を合わせるための修正方針・未確定事項 | [selectの互換性と修正計画](dns-select-native-compatibility.md) |
+| v1.0.1の改修要件・内蔵DNSとの互換性・未確定事項 | [selectの互換性と修正計画](dns-select-native-compatibility.md) |
 | IPv6のみの上流DNSが設定されている場合 | [IPv4 DNSへの切替仕様](dns-ipv6-fallback.md) |
 | 現在の制約と過去版で修正した問題 | [既知の問題](known-issues.md) |
 | ソースからのビルド、試験用設定、ファイル構成 | [開発・検証](development.md) |
@@ -37,6 +37,7 @@
 |---|---|
 | 機能試験・配備後確認の一覧 | [検証範囲](validation.md) |
 | 内蔵DNSのselectとPP・DHCP状態、現行Luaとの差 | [2026-10-07の実機比較](results/native-select-2026-10-07.md) |
+| 実PPPoEの接続・切断、代替DNSの保持、日本語の状態表示 | [2026-10-08の内蔵DNS・状態取得試験](results/native-pppoe-2026-10-08.md) |
 | v1.0.0に採用した設定再読込の実機試験 | [設定変更・連続試験の結果](results/config-reload-2026-10-05.md) |
 | v0.9.9の負荷試験 | [既定制限と制限緩和時の結果](load-test-v0.9.9.md) |
 | v0.1.3の負荷試験 | [過去版の結果](load-test-v0.1.3.md) |
