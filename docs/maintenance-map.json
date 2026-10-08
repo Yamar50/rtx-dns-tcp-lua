@@ -58,7 +58,7 @@
         {
           "tag": "v1.0.1",
           "source": "docs/releases/v1.0.1.md",
-          "status": "local-draft-not-published"
+          "status": "published"
         }
       ],
       "rule": "Source Markdown is intended body. Before PATCH, compare fresh remote. After PATCH, compare exact body. Preserve flags/assets/tag/latest. Other versions are historical unless explicitly selected."
@@ -245,7 +245,9 @@
         "docs/compatibility.md",
         "docs/releases/v1.0.0.md",
         "docs/releases/v1.0.0-details.md",
-        "docs/releases/history.md"
+        "docs/releases/history.md",
+        "docs/releases/v1.0.1.md",
+        "docs/releases/v1.0.1-details.md"
       ],
       "artifacts": [
         "docs/images/*.png",
