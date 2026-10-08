@@ -64,4 +64,46 @@ for _, size in ipairs({512,1232,2048,4096,65535}) do
   check(sent:sub(1,position-1) == raw_query:sub(1,position-1)
     and sent:sub(position+2) == raw_query:sub(position+2), 'only EDNS size bytes may change')
 end
+
+-- EDE is hop metadata: success, NXDOMAIN and SERVFAIL retain their RCODE.
+local message = 'rtx-dns: select:2 PP DNS destination unavailable; used configured dns server; answer may differ.'
+for _, code in ipairs({0,2,3}) do
+  local original = wire.error_response(edns,code)
+  local annotated,err = wire.annotate_response(original,edns,message)
+  check(not err)
+  local r=assert(wire.validate_response(annotated,edns))
+  check(r.rcode==code and r.arcount==1)
+  check(wire.u16(annotated,r.opt.rdata)==15)
+  check(wire.u16(annotated,r.opt.rdata+4)==0)
+  check(annotated:sub(r.opt.rdata+6)==message)
+end
+local before=response(edns,opt('\0\0\128\0','\0\10\0\4abcd'))
+local after,err=wire.annotate_response(before,edns,message)
+check(not err)
+local parsed_after=assert(wire.validate_response(after,edns))
+check(parsed_after.arcount==1 and parsed_after.do_bit and parsed_after.ancount==1)
+check(after:find('\0\10\0\4abcd',1,true)~=nil,'preserve existing EDNS options')
+check(after:sub(1,parsed_after.opt.rdata-3)==before:sub(1,parsed_after.opt.rdata-3))
+local legacy,why=wire.annotate_response(response(plain),plain,message)
+check(legacy==response(plain) and why~=nil)
+local middle=response(edns,opt()..additional,2)
+local same,why=wire.annotate_response(middle,edns,message)
+check(same==middle and why~=nil,'do not move compressed records after OPT')
+for _,bad in ipairs({'',string.rep('a',241),'bad\ntext'}) do
+  local r,e=wire.annotate_response(before,edns,bad)
+  check(r==before and e~=nil)
+end
+-- A syntactically valid maximum frame remains intact when EDE cannot fit.
+local bighead='\0\7\129\128\0\1\0\1\0\0\0\0'..edns.question
+local length=65535-#bighead-12
+local big=bighead..'\192\12'..u16(65280)..'\0\1\0\0\0\30'..u16(length)..string.rep('x',length)
+check(#big==65535 and wire.validate_response(big,edns)~=nil)
+local maximum,reason=wire.annotate_response(big,edns,message)
+check(maximum==big and reason~=nil)
+local small_length=length-(11+6+#message)
+local near=bighead..'\192\12'..u16(65280)..'\0\1\0\0\0\30'..u16(small_length)..string.rep('x',small_length)
+local maximum_added,err=wire.annotate_response(near,edns,message)
+check(not err and #maximum_added==65535)
+check(wire.validate_response(maximum_added,edns)~=nil)
+
 print('policy wire checks passed: ' .. count)

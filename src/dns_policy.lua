@@ -367,7 +367,7 @@ local function source(runtime, kind, id)
     return state
 end
 
-local function resolve(spec, runtime, ordinary)
+local function resolve(spec, runtime, ordinary, selection)
     if spec.kind == "reject" then return {}, nil, "reject" end
     if spec.kind == "opaque" or spec.unsupported then
         return {}, "unsupported DNS source", "unknown", "source_unsupported"
@@ -379,6 +379,24 @@ local function resolve(spec, runtime, ordinary)
     local state = source(runtime, spec.kind, spec.id)
     if state.state == "unknown" then return {}, state.reason, "unknown", "source_unknown" end
     if state.state == "absent" then
+        if spec.kind == "pp" then
+            -- Current IPCP exposes notified DNS, not a native default retained
+            -- at session establishment. Do not guess from today's inline IP.
+            if state.availability == "pp_no_dns" and selection and not spec.nat46 then
+                if ordinary and ordinary.spec.kind == "fixed" and not ordinary.unavailable then
+                    return ordinary.upstreams, nil, "ordinary", "pp_default_unresolved"
+                end
+                return {}, "PP DNS destination unavailable; no usable fixed DNS", "absent", "pp_default_unresolved"
+            end
+            return {}, "PP DNS source has no usable servers", "absent", "source_absent"
+        end
+        if spec.kind == "dhcp" and (state.availability == "dhcp_no_lease"
+            or state.availability == "dhcp_no_dns") then
+            if ordinary then
+                return ordinary.upstreams, ordinary.reason, "ordinary", ordinary.unavailable_kind
+            end
+            return {}, "DHCP has no acquired DNS or ordinary DNS", "absent", "source_absent"
+        end
         if spec.defaults and #spec.defaults > 0 then
             local out, reason, unavailable_kind = usable(spec.defaults)
             return out, reason, reason and "unsupported" or "default", unavailable_kind
@@ -409,7 +427,7 @@ end
 
 local function signature(route)
     local out = {route.reason or "", route.status or "", route.restrict_state or "", route.unavailable_kind or "",
-        route.unavailable and "unavailable" or "available"}
+        route.unavailable and "unavailable" or "available", route.ede_text or ""}
     for _, endpoint in ipairs(route.upstreams) do
         out[#out + 1] = endpoint.host .. ":" .. endpoint.port .. ":" .. tostring(endpoint.edns)
     end
@@ -419,14 +437,17 @@ end
 function Policy:refresh(runtime)
     local before, changed, diagnostics = {}, false, {}
     for _, route in ipairs(self.routes) do before[route] = signature(route) end
-    local function assign(route, ordinary)
-        route.upstreams, route.reason, route.status, route.unavailable_kind = resolve(route.spec, runtime, ordinary)
+    local function assign(route, ordinary, selection)
+        route.upstreams, route.reason, route.status, route.unavailable_kind = resolve(route.spec, runtime, ordinary, selection)
         route.unavailable = route.reason ~= nil
+        route.ede_text = route.unavailable_kind == "pp_default_unresolved" and
+            ("rtx-dns: " .. route.policy_id .. " PP DNS destination unavailable; " ..
+                "used configured dns server; answer may differ.") or nil
     end
     if self.fallback then assign(self.fallback) end
     for _, rule in ipairs(self.rules) do
         local route = rule.route
-        assign(route, self.fallback)
+        assign(route, self.fallback, true)
         if rule.restrict_pp then
             local ok, state = false, nil
             if type(runtime) == "table" and type(runtime.pp_state) == "function" then
@@ -439,6 +460,7 @@ function Policy:refresh(runtime)
             route.unavailable = true
             route.reason = rule.opaque and "unsupported selection condition" or "restrict PP state unknown"
             route.unavailable_kind = rule.opaque and "condition_unknown" or "restrict_unknown"
+            route.ede_text = nil
         end
         -- Unsupported reject conditions must SERVFAIL, not drop a query on
         -- a condition that was never established.

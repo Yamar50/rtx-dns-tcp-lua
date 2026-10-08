@@ -3,6 +3,7 @@ PYTHON ?= python3
 
 .PHONY: test build release nvr-test installer uninstaller docs-check
 test:
+	$(PYTHON) tools/build_status_text.py --check
 	$(PYTHON) tools/doc_impact.py --check
 	$(LUA) tests/test_installer_sha256.lua
 	$(LUA) tests/test_installer_http.lua
@@ -14,6 +15,7 @@ test:
 	$(LUA) tests/test_dynamic_policy.lua
 	$(LUA) tests/test_ipv6_fallback.lua
 	$(LUA) tests/test_dns_runtime.lua
+	$(LUA) tests/test_native_pp.lua
 	$(LUA) tests/test_aaaa_filter.lua
 	$(LUA) tests/test_auto_config.lua
 	$(LUA) tests/test_nvr_compat.lua

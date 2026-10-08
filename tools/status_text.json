@@ -1,0 +1,75 @@
+{
+  "_comment": "Exact English and Japanese status phrases. Japanese generates CP932 (observed rt.command on RTX830/1210) and UTF-8 (compatibility). Never infer current status from substring/history. Trailing ASCII period and whitespace are normalized by runtime. Preserve firmware spelling 継. Existing legacy phrases retained; extra English/PPTP variants need evidence before addition.",
+  "labels": {
+    "interface": [
+      "Interface",
+      "インタフェース",
+      "インターフェース"
+    ],
+    "ip": [
+      "IP Address",
+      "IPアドレス"
+    ],
+    "dns": [
+      "DNS Server",
+      "DNS Servers",
+      "DNSサーバ",
+      "DNSサーバー"
+    ],
+    "common": [
+      "Common information",
+      "Common info",
+      "共通情報"
+    ],
+    "gateway": [
+      "Default gateway",
+      "Gateway",
+      "デフォルトゲートウェイ"
+    ]
+  },
+  "missing": [
+    "none",
+    "not assigned",
+    "not acquired",
+    "unassigned",
+    "requesting",
+    "未取得",
+    "取得要求中",
+    "取得中",
+    "取得していません",
+    "未設定",
+    "サーバ検索中"
+  ],
+  "pp_states": {
+    "up": [
+      "PPPoEセッションは接続されています",
+      "PPPoE session is connected",
+      "PP is connected",
+      "Current PPPoE session status is Connected",
+      "PPTPセッションは接続されています"
+    ],
+    "down": [
+      "PPPoEセッションは接続されていません",
+      "PPPoE session is disconnected",
+      "PPPoE session is not connected",
+      "PP is disconnected",
+      "PP is not connected",
+      "Current line status is disabled",
+      "Current PPPoE session status is disabled",
+      "Current PPPoE session status is Offline",
+      "Current PPPoE session status is Offline, never connected",
+      "回線は現在使用できません",
+      "PPPoEセッションは現在使用できません",
+      "PPPoEセッションは一度も継っていません",
+      "PPPoEセッションは継っていません"
+    ],
+    "connecting": [
+      "Current PPPoE session status is In connecting process",
+      "PPPoEセッションは接続処理中です"
+    ]
+  },
+  "history": [
+    "Last PPPoE session status:",
+    "直前のPPPoEセッションの状態:"
+  ]
+}

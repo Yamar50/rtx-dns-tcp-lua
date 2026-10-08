@@ -343,6 +343,36 @@ function M.downstream_response(raw, q, server)
     return sub(raw, 1, 10) .. pack16(r.arcount - 1) .. sub(raw, 13, r.opt.start - 1)
 end
 
+-- Add hop-specific diagnostic metadata without moving any DNS record.
+-- Nontrailing OPT or a full frame is left intact: diagnostics are optional.
+-- Caller passes only a validated response, but validate again here for the
+-- exported API and to avoid corrupting compression offsets on malformed data.
+function M.annotate_response(raw, q, text)
+    if not q.opt then return raw, "client has no EDNS" end
+    if type(text) ~= "string" or #text == 0 or #text > 240
+        or text:find("[^\32-\126]") then return raw, "invalid EDE text" end
+    local r, err = M.validate_response(raw, q)
+    if not r then return raw, err end
+    if r.signed then return raw, "signed response" end
+    if r.opt and (r.opt.finish ~= #raw or r.edns_version ~= 0) then
+        return raw, "cannot extend response OPT"
+    end
+    local option = pack16(15) .. pack16(2 + #text) .. pack16(0) .. text
+    local added = #option + (r.opt and 0 or 11)
+    if #raw + added > 65535 then return raw, "EDE exceeds DNS frame" end
+    if r.opt then
+        local pos = r.opt.rdata - 2
+        return sub(raw, 1, pos - 1) .. pack16(r.opt.rdlength + #option)
+            .. sub(raw, pos + 2) .. option
+    end
+    if r.arcount == 65535 then return raw, "additional section count limit" end
+    -- Upstream EDNS may have been explicitly disabled. The client's OPT still
+    -- authorizes this local annotation; do not manufacture DO/AD or signatures.
+    return sub(raw, 1, 10) .. pack16(r.arcount + 1) .. sub(raw, 13)
+        .. "\0" .. pack16(41) .. pack16(q.edns_udp_size) .. "\0\0\0\0"
+        .. pack16(#option) .. option
+end
+
 function M.frame(raw)
     if type(raw) ~= "string" or #raw < 12 or #raw > 65535 then
         return nil, "invalid DNS frame size"

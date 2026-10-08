@@ -8,11 +8,11 @@
 
 このページは、配布ファイルの手動転送と、導入後の更新・再起動を説明します。[オンラインインストール](../README.md)を使う場合、初回のファイル転送は不要です。
 
-この手順はv1.0.0の共通ファイルを対象とします。機種ごとの最低ファームウェアと確認状況は[対応機種の管理表](compatibility.md)を参照してください。
+この手順はv1.0.1の共通ファイルを対象とします。機種ごとの最低ファームウェアと確認状況は[対応機種の管理表](compatibility.md)を参照してください。
 
 ## ビルド済みファイル
 
-GitHubの[v1.0.0 Release](https://github.com/Yamar50/rtx-dns-tcp-lua/releases/tag/v1.0.0)から[rtx-dns.lua](https://github.com/Yamar50/rtx-dns-tcp-lua/releases/download/v1.0.0/rtx-dns.lua)と[SHA256SUMS](https://github.com/Yamar50/rtx-dns-tcp-lua/releases/download/v1.0.0/SHA256SUMS)をダウンロードします。1本のLuaファイルに必要な本体と自動設定処理を含み、追加ライブラリ・Python・手編集は不要です。
+GitHubの[v1.0.1 Release](https://github.com/Yamar50/rtx-dns-tcp-lua/releases/tag/v1.0.1)から[rtx-dns.lua](https://github.com/Yamar50/rtx-dns-tcp-lua/releases/download/v1.0.1/rtx-dns.lua)と[SHA256SUMS](https://github.com/Yamar50/rtx-dns-tcp-lua/releases/download/v1.0.1/SHA256SUMS)をダウンロードします。1本のLuaファイルに必要な本体と自動設定処理を含み、追加ライブラリ・Python・手編集は不要です。
 
 配布版は起動時にYAMAHAルーターのconfigを読み、TCP/53で待ち受けます。
 
@@ -38,7 +38,7 @@ GitHubの[v1.0.0 Release](https://github.com/Yamar50/rtx-dns-tcp-lua/releases/ta
 
 ## 初回インストール
 
-選んだバージョンを自動取得・SHA256照合・起動する場合は、[コマンド1行のインストーラー](installer.md)も利用できます。v1.0.0用を使用します。指定した版だけを取得します。手動で転送する場合は以下へ進んでください。
+選んだバージョンを自動取得・SHA256照合・起動する場合は、[コマンド1行のインストーラー](installer.md)も利用できます。v1.0.1用を使用します。指定した版だけを取得します。手動で転送する場合は以下へ進んでください。
 
 USBメモリやmicroSDカード、SFTP等でインストールします。機種が備える転送方法を使用してください。
 
@@ -76,7 +76,7 @@ show status lua
 show log
 ```
 
-`show status lua`で対象ファイルが`[running]`となることを確認し、下記の[動作確認](#動作確認)でDNS応答も確認します。v1.0.0は設定の復旧待ちでもタスクが稼働するため、`running`だけでDNSの応答可能な状態とは判断できません。`lua`コマンドは起動後にプロンプトを返すため、`&`は不要です。同じファイルを重複起動しないでください。
+`show status lua`で対象ファイルが`[running]`となることを確認し、下記の[動作確認](#動作確認)でDNS応答も確認します。v1.0.1は設定の復旧待ちでもタスクが稼働するため、`running`だけでDNSの応答可能な状態とは判断できません。`lua`コマンドは起動後にプロンプトを返すため、`&`は不要です。同じファイルを重複起動しないでください。
 
 ## YAMAHAルーター起動時の自動実行
 

@@ -1168,6 +1168,72 @@ function tests.actual_policy_wire_and_cache_preserve_route_and_edns_behavior()
   r:close()
 end
 
+
+function tests.pp_default_ede_survives_cache_and_never_leaks_to_normal_route()
+  local Policy, Runtime, w, Cache = require('dns_policy'), require('dns_runtime'), require('dns_wire'), require('cache')
+  local config='dns server 198.18.32.30 edns=off\n'
+    ..'dns server select 2 pp 1 any special.test restrict pp 1\n'
+    ..'dns server select 3 198.18.32.31 any .'
+  local ipcp='IPCP Local: IP-Address, Remote: IP-Address'
+  local reader=assert(Runtime.new(config,function() return true,'PP[01]:\nCurrent PPPoE session status is Connected.\n'..ipcp end))
+  reader:refresh()
+  local policy=assert(Policy.parse(config));policy:refresh(reader)
+  local env=mock({respond=function(sock,raw)
+    local q=assert(w.parse_query(raw));eq(q.opt,nil,'fixed DNS edns=off remains effective')
+    local response=raw:sub(1,2)..'\129\128\0\1\0\1\0\0\0\0'..q.question
+      ..'\192\12\0\1\0\1\0\0\0\60\0\4\192\0\2\7'
+    sock.input=sock.input..w.frame(response)
+  end})
+  local cache=Cache.new(256,1048576)
+  local r=relay(env,{dns_policy=policy,policy_refresh=function() reader:refresh();return policy:refresh(reader) end},cache,w)
+  local function ask(idv,name,edns)
+    local raw=u16(idv)..'\1\0\0\1\0\0\0\0'..u16(edns and 1 or 0)
+      ..canonical_name(name)..'\0\1\0\1'..(edns and '\0\0\41\4\208\0\0\0\0\0\0' or '')
+    local c=env.client(raw);until_true(r,function() return #c.output>0 end)
+    local response=c.output:sub(3);local parsed=assert(w.validate_response(response,assert(w.parse_query(raw))))
+    c.eof=true;steps(r,2)
+    return parsed,response
+  end
+  local first,raw=ask(1801,'special.test',true)
+  eq(first.rcode,0);assert(first.opt and raw:find('used configured dns server',1,true))
+  eq(env.upstream_queries,1);eq(env.upstream_requests[1].host,'198.18.32.30')
+  local hit,hraw=ask(1802,'special.test',true)
+  assert(hit.opt and hraw:find('used configured dns server',1,true))
+  eq(env.upstream_queries,1);eq(r:stats_snapshot().cache_hits,1)
+  local legacy=ask(1803,'special.test',false)
+  eq(legacy.opt,nil);eq(legacy.rcode,0);eq(r:stats_snapshot().ede_omitted,1)
+  local normal=ask(1804,'normal.test',true)
+  eq(normal.opt,nil);eq(env.upstream_requests[#env.upstream_requests].host,'198.18.32.31')
+  -- Notification arrives. Same query now uses acquired DNS and loses annotation;
+  -- the prior fallback cache/connection generation must be invalidated.
+  ipcp='IPCP Local: IP-Address Primary-DNS(198.18.32.31), Remote: IP-Address'
+  env.time=31;steps(r,2)
+  local updated=ask(1805,'special.test',true)
+  eq(updated.opt,nil);eq(env.upstream_requests[#env.upstream_requests].host,'198.18.32.31')
+  eq(r:stats_snapshot().policy_updates,1)
+  r:close()
+end
+
+function tests.pp_default_failed_or_missing_fixed_dns_returns_annotated_servfail()
+  local Policy,Runtime,w=require('dns_policy'),require('dns_runtime'),require('dns_wire')
+  for _,fixed in ipairs({'','dns server 198.18.32.30 edns=off\n'}) do
+    local config=fixed..'dns server select 2 pp 1 any . restrict pp 1\ndns server select 3 198.18.32.31 any .'
+    local reader=assert(Runtime.new(config,function() return true,
+      'PP[01]:\nCurrent PPPoE session status is Connected.\nIPCP Local: IP-Address, Remote: IP-Address' end))
+    reader:refresh();local policy=assert(Policy.parse(config));policy:refresh(reader)
+    local env=mock({connect_mode=function() return 'refused' end})
+    local r=relay(env,{dns_policy=policy},nil,w)
+    local raw='\7\1\1\0\0\1\0\0\0\0\0\1'..canonical_name('special.test')
+      ..'\0\1\0\1\0\0\41\4\208\0\0\0\0\0\0'
+    local c=env.client(raw);until_true(r,function() return #c.output>0 end)
+    local reply=c.output:sub(3);local parsed=assert(w.validate_response(reply,assert(w.parse_query(raw))))
+    eq(parsed.rcode,2);assert(parsed.opt and reply:find('fallback failed',1,true))
+    eq(env.upstream_queries,0)
+    for _,ep in ipairs(r.endpoints) do if ep.host=='198.18.32.31' then eq(ep.socket,nil) end end
+    r:close()
+  end
+end
+
 function tests.policy_response_transform_failure_is_final_servfail()
   local route = { policy_id = "edns", upstreams = { { host = "198.18.32.30", port = 15353, edns = true } } }
   local policy = route_policy({ route }, function() return route end)

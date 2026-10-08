@@ -12,46 +12,47 @@
 
 ## 実行方法
 
-最新版は**v1.0.0（正式版）**です。既存環境で実行した場合も、この版へ置き換わります。[過去版の説明・インストールコマンド](releases/history.md)は別ページにまとめています。
+最新版は**v1.0.1（正式版）**です。既存環境で実行した場合も、この版へ置き換わります。[過去版の説明・インストールコマンド](releases/history.md)は別ページにまとめています。
 
 | 導入する版 | 公開区分 | インストーラーの配布ファイル |
 |---|---|---|
-| [v1.0.0](https://github.com/Yamar50/rtx-dns-tcp-lua/releases/tag/v1.0.0) | 正式版 | [rtx-dns-install-v1.0.0.lua](https://github.com/Yamar50/rtx-dns-tcp-lua/releases/download/v1.0.0/rtx-dns-install-v1.0.0.lua) |
+| [v1.0.1](https://github.com/Yamar50/rtx-dns-tcp-lua/releases/tag/v1.0.1) | 正式版 | [rtx-dns-install-v1.0.1.lua](https://github.com/Yamar50/rtx-dns-tcp-lua/releases/download/v1.0.1/rtx-dns-install-v1.0.1.lua) |
 
 YAMAHAルーターの**管理者コンソール**または[WebGUIのコマンド実行画面](#webgui)で、選んだ版の1行だけを実行します。先頭の`yes`は自動起動の指定です。自動起動を追加せずにインストールする場合は、この`yes`だけを`no`へ変更します。
 
 このコマンドは、固定したcommitからインストーラーを取得し、HTTP応答とサイズを確認してメモリ上で実行します。インストーラーの版確認・重複実行の検出・本体のSHA256照合などは、取得したインストーラーが行います。`/lua`がなくても、設定・実行状態と本体の検証を済ませてから自動で作成します。インストーラー自身はファイルへ保存しないため、既存の`/lua/rtx-dns-install.lua`がある場合も上書き・削除しません。
 
-<a id="version-v100"></a>
+<a id="version-v101"></a>
 
-### v1.0.0をインストール
+### v1.0.1をインストール
 
-<!-- INSTALLER_COMMAND_V100_START -->
+<!-- INSTALLER_COMMAND_V101_START -->
 ```text
-lua -e 'local DNSINSTALL_BOOT="yes";local r=rt.httprequest({url="https://raw.githubusercontent.com/Yamar50/rtx-dns-tcp-lua/5dce1d213fcbbc6872df60fd50f7113f36cdaae7/installer/versions/v1.0.0/rtx-dns-install.lua",method="GET",timeout=30});assert(r.rtn1 and r.code==200 and type(r.body)=="string" and #r.body==25773,"Installer download failed");assert(loadstring(r.body))(DNSINSTALL_BOOT,"v1.0.0")'
+lua -e 'local DNSINSTALL_BOOT="yes";local r=rt.httprequest({url="https://raw.githubusercontent.com/Yamar50/rtx-dns-tcp-lua/f771b528ce71c34bb664de1dde35fc747e155518/installer/versions/v1.0.1/rtx-dns-install.lua",method="GET",timeout=30});assert(r.rtn1 and r.code==200 and type(r.body)=="string" and #r.body==25773,"Installer download failed");assert(loadstring(r.body))(DNSINSTALL_BOOT,"v1.0.1")'
 ```
-<!-- INSTALLER_COMMAND_V100_END -->
+<!-- INSTALLER_COMMAND_V101_END -->
 
+<a id="version-v100"></a>
 <a id="version-v014"></a>
 <a id="version-v099"></a>
 
-v0.1.4・v0.9.9用のコマンドは[過去版のページ](releases/history.md#過去版のオンラインインストール)に移動しました。
+v0.1.4・v0.9.9・v1.0.0用のコマンドは[過去版のページ](releases/history.md#過去版のオンラインインストール)に移動しました。
 
 - `yes`：起動確認後に自動起動を登録し、`save`で現在のルーター設定全体を保存します。他の未保存の設定変更も保存されます。
 - `no`：インストーラー自身は自動起動設定と保存済みconfigを変更しません。すでにある自動起動設定は維持します。ただし、WebGUIのコマンド実行画面では、画面側の機能で現在のルーター設定が自動保存されます。
 
-画面に`DNSINSTALL (16/16) Installation complete`が出れば、インストールは終了しています。続いて表示される案内に従って**Enterキーを押すと、ルーターのコマンドプロンプトを再表示できます。** たとえばv1.0.0では、最後に次の2行を表示します。
+画面に`DNSINSTALL (16/16) Installation complete`が出れば、インストールは終了しています。続いて表示される案内に従って**Enterキーを押すと、ルーターのコマンドプロンプトを再表示できます。** たとえばv1.0.1では、最後に次の2行を表示します。
 
 ```text
-DNSINSTALL (16/16) Installation complete: v1.0.0.
+DNSINSTALL (16/16) Installation complete: v1.0.1.
 DNSINSTALL Press ENTER to display the router command prompt.
 ```
 
-ログのカウンターは、途中経過・結果を含めて表示するたびに1つ進みます。現在のv1.0.0は`(1/16)`から始まり、`(16/16) Installation complete`で完了します。新規導入・同じ版の再導入・`yes`/`no`の指定によって母数は変わりません。最後のEnter案内には番号を付けません。所要時間の割合を示すものではありません。
+ログのカウンターは、途中経過・結果を含めて表示するたびに1つ進みます。現在のv1.0.1は`(1/16)`から始まり、`(16/16) Installation complete`で完了します。新規導入・同じ版の再導入・`yes`/`no`の指定によって母数は変わりません。最後のEnter案内には番号を付けません。所要時間の割合を示すものではありません。
 
 `lua`コマンドは処理中でもコンソールのプロンプトを返します。表示が混ざりにくいよう、インストーラーは最初の進捗表示前に1秒待機して改行します。プロンプトが表示されても処理は続いているため、上の完了表示を待ってください。`Installation complete`まで表示されたことを確認してください。完了後はインストーラーがEnter入力を待っているわけではありません。同じコマンドを重ねて実行する必要はありません。
 
-既存の`/lua/rtx-dns.lua`と内容が同じなら、本体ファイルの上書きは省略します。ディスク上のファイルと稼働中の版が異なる場合もあるため、対象タスクは停止・再起動し、確認したファイルと現在のDNS設定を読み込みます。v1.0.0ではDNS関連の設定変更だけなら再インストールや手動再起動は不要です。[自動再読込](config-reload.md)で反映します。
+既存の`/lua/rtx-dns.lua`と内容が同じなら、本体ファイルの上書きは省略します。ディスク上のファイルと稼働中の版が異なる場合もあるため、対象タスクは停止・再起動し、確認したファイルと現在のDNS設定を読み込みます。v1.0.1ではDNS関連の設定変更だけなら再インストールや手動再起動は不要です。[自動再読込](config-reload.md)で反映します。
 
 <a id="webgui"></a>
 
@@ -82,7 +83,7 @@ lua /lua/rtx-dns-install.lua yes
 
 開始時の引数には`yes`か`no`を必ず指定します。本体のSHA256照合や起動確認などは、上の1行コマンドと共通です。この方法でも、本体の取得にはルーターからのHTTPS接続が必要です。
 
-手動転送したインストーラーは、成功時に作業ファイルとともに自身を削除します。この場合の完了表示は`DNSINSTALL (16/16) Installation complete: v1.0.0; installer removed.`のようになります。失敗した場合はインストーラーを残します。
+手動転送したインストーラーは、成功時に作業ファイルとともに自身を削除します。この場合の完了表示は`DNSINSTALL (16/16) Installation complete: v1.0.1; installer removed.`のようになります。失敗した場合はインストーラーを残します。
 
 ## 自動で行う処理
 
@@ -98,11 +99,15 @@ lua /lua/rtx-dns-install.lua yes
 
 スケジュールの検索範囲はインストーラーの実装上の範囲です。別のスクリプトや他のスケジュールは変更しません。別の保存場所・独自の起動設定・NVR試験版からの移行には[通常の手順](install.md)を使用してください。
 
-**起動確認は対象Luaタスクが継続して実行されていることの確認です。** v1.0.0では設定の復旧待ちでもLuaタスクは稼働するため、タスクの稼働だけでDNS待受が成功しているとは判断できません。導入後は利用する端末から`dig @ルーターのIPアドレス microsoft.com TXT +time=5 +tries=1`などで名前解決も確認できます。
+**起動確認は対象Luaタスクが継続して実行されていることの確認です。** v1.0.1では設定の復旧待ちでもLuaタスクは稼働するため、タスクの稼働だけでDNS待受が成功しているとは判断できません。導入後は利用する端末から`dig @ルーターのIPアドレス microsoft.com TXT +time=5 +tries=1`などで名前解決も確認できます。
+
+### v1.0.1の実機確認
+
+2026年10月8日、RTX1210 Rev.14.01.42で、上記と同じ固定commitからGitHubのHTTPS経由でインストーラーと本体を取得し、`no`指定の導入とTCPのDNS応答を確認しました。本体はSHA256・全バイト一致を照合し、試験後に元の設定・Lua非稼働状態へ復元しました。[追加確認の記録](results/v1.0.1-2026-10-08.md#release-followup)
 
 ### v1.0.0の実機確認
 
-2026年10月5日、RTX1210 Rev.14.01.42で、上記のv1.0.0用コマンドを`no`指定で実行し、16件の連番表示、本体SHA256・構文検査、導入後の全バイト一致とDNS応答を確認しました。`dig`のUDPからTCPへの自動切替でも大型TXTの取得に成功しました。試験後は元の設定・稼働状態へ復元しています。[最終試験の記録](results/config-reload-2026-10-05.md#バージョン固定オンラインインストーラーの確認10月5日)
+2026年10月5日、RTX1210 Rev.14.01.42で、当時のv1.0.0用コマンドを`no`指定で実行し、16件の連番表示、本体SHA256・構文検査、導入後の全バイト一致とDNS応答を確認しました。`dig`のUDPからTCPへの自動切替でも大型TXTの取得に成功しました。試験後は元の設定・稼働状態へ復元しています。[最終試験の記録](results/config-reload-2026-10-05.md#バージョン固定オンラインインストーラーの確認10月5日)
 
 ## HTTPSでの配布方法
 

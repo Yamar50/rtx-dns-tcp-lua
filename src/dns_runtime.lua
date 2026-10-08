@@ -3,11 +3,16 @@
 -- All numeric parsing is bounded before conversion for Yamaha integer Lua 5.1.
 local M, Reader = {}, {}
 local Interfaces = require("interfaces")
+local StatusText = require("status_text")
 Reader.__index = Reader
 local MAX_TEXT, MAX_LINE, MAX_SOURCES, MAX_SERVERS = 1048576, 4096, 32, 64
 
 local function trim(s) return (s:gsub("^%s+", ""):gsub("%s+$", "")) end
-local function compact(s) return (s:gsub("%s", ""):lower()) end
+-- CP932 trail bytes can be ASCII letters. Never case-fold those bytes.
+local function compact(s)
+    s = s:gsub("%s", "")
+    return s:find("[\128-\255]") and s or s:lower()
+end
 local function number(s, max)
     if type(s) ~= "string" or not s:match("^%d+$") then return nil end
     s = s:gsub("^0+", ""); if s == "" then s = "0" end
@@ -67,6 +72,7 @@ local function result(state, reason, servers)
 end
 local function copy(value)
     local out = result(value.state, value.reason)
+    out.availability = value.availability
     for i, ip in ipairs(value.servers) do out.servers[i] = ip end
     return out
 end
@@ -87,54 +93,54 @@ local function lines(text)
     return out
 end
 
--- Exact field names accepted in English, UTF-8 and Shift JIS. Byte escapes
--- keep Shift JIS independent of the source file's encoding and locale.
-local labels = {}
-local function label(kind, values)
-    for _, value in ipairs(values) do labels[compact(value)] = kind end
+-- English keys are case-insensitive; Japanese bytes are matched exactly.
+local function lookup(values, sentence)
+    local out = {}
+    for text, value in pairs(values) do
+        local key = compact(text)
+        if sentence then key = key:gsub("%.$", "") end
+        out[key] = value
+    end
+    return out
 end
-label("interface", {"Interface", "\227\130\164\227\131\179\227\130\191\227\131\149\227\130\167\227\131\188\227\130\185", "\227\130\164\227\131\179\227\130\191\227\131\188\227\131\149\227\130\167\227\131\188\227\130\185",
-    "\131\067\131\147\131\094\131\116\131\070\129\091\131\088",
-    "\131\067\131\147\131\094\129\091\131\116\131\070\129\091\131\088"})
-label("ip", {"IP Address", "IP\227\130\162\227\131\137\227\131\172\227\130\185", "IP\131\065\131\104\131\140\131\088"})
-label("dns", {"DNS Server", "DNS Servers", "DNS\227\130\181\227\131\188\227\131\144", "DNS\227\130\181\227\131\188\227\131\144\227\131\188",
-    "DNS\131\084\129\091\131\111", "DNS\131\084\129\091\131\111\129\091"})
-label("common", {"Common information", "Common info", "\229\133\177\233\128\154\230\131\133\229\160\177", "\139\164\146\202\143\238\149\241"})
-label("gateway", {"Default gateway", "Gateway", "\227\131\135\227\131\149\227\130\169\227\131\171\227\131\136\227\130\178\227\131\188\227\131\136\227\130\166\227\130\167\227\130\164",
-    "\131\102\131\116\131\072\131\139\131\103\131\081\129\091\131\103\131\069\131\070\131\067"})
-local missing = {}
-for _, value in ipairs({"none", "not assigned", "not acquired", "unassigned", "requesting",
-    "\230\156\170\229\143\150\229\190\151", "\229\143\150\229\190\151\232\166\129\230\177\130\228\184\173", "\229\143\150\229\190\151\228\184\173", "\229\143\150\229\190\151\227\129\151\227\129\166\227\129\132\227\129\190\227\129\155\227\130\147", "\230\156\170\232\168\173\229\174\154",
-    "\150\162\142\230\147\190", "\142\230\147\190\151\118\139\129\146\134",
-    "\142\230\147\190\146\134", "\142\230\147\190\130\181\130\196\130\162\130\220\130\185\130\241",
-    "\150\162\144\221\146\232"}) do missing[compact(value)] = true end
-local connected = {"PPPoE\227\130\187\227\131\131\227\130\183\227\131\167\227\131\179\227\129\175\230\142\165\231\182\154\227\129\149\227\130\140\227\129\166\227\129\132\227\129\190\227\129\153",
-    "PPPoE\131\090\131\098\131\086\131\135\131\147\130\205\144\218\145\177\130\179\130\234\130\196\130\162\130\220\130\183",
-    "PPPoE session is connected", "PP is connected"}
-local disconnected = {"PPPoE\227\130\187\227\131\131\227\130\183\227\131\167\227\131\179\227\129\175\230\142\165\231\182\154\227\129\149\227\130\140\227\129\166\227\129\132\227\129\190\227\129\155\227\130\147",
-    "PPPoE\131\090\131\098\131\086\131\135\131\147\130\205\144\218\145\177\130\179\130\234\130\196\130\162\130\220\130\185\130\241",
-    "PPPoE session is disconnected", "PPPoE session is not connected", "PP is disconnected", "PP is not connected"}
-local function phrase(line, choices)
-    line = compact(line):gsub("%.$", "")
-    for _, choice in ipairs(choices) do if line == compact(choice) then return true end end
-    return false
-end
+local labels = lookup(StatusText.labels)
+local missing = lookup(StatusText.missing)
+local pp_states = lookup(StatusText.pp_states, true)
+local history = lookup(StatusText.history)
 
 local function parse_pp(text, id)
     local ls = lines(text)
     if not ls then return "unknown", result("unknown", "invalid PP status output") end
-    local header, up, down, conflict = false, false, false, false
+    local header, state, conflict, historical = false, nil, false, false
+    local current_lines = {}
     for _, line in ipairs(ls) do
         local current = line:match("^%s*PP%[(%d+)%]:")
         if current then
             if header or pp_id(current) ~= id then conflict = true end
             header = true
         end
-        if phrase(line, connected) then up = true end
-        if phrase(line, disconnected) then down = true end
+        if history[compact(line)] then historical = true end
+        if header and not historical then
+            local seen = pp_states[compact(line):gsub("%.$", "")]
+            if seen then
+                if state and state ~= seen then conflict = true end
+                state = seen
+            end
+            current_lines[#current_lines + 1] = line
+        end
     end
-    if not header or conflict or up == down then return "unknown", result("unknown", "unrecognized PP connection state") end
-    if down then return "down", result("absent", "PP is disconnected") end
+    if not header or conflict or not state then
+        return "unknown", result("unknown", "unrecognized PP connection state")
+    end
+    if state == "down" then
+        local item = result("absent", "PP is disconnected")
+        item.availability = "pp_down"
+        return state, item
+    end
+    if state == "connecting" then
+        return state, result("unknown", "PP connection in progress")
+    end
+    text = table.concat(current_lines, "\n")
     local _, local_count = text:gsub("IPCP%s+Local:", "")
     if local_count ~= 1 then return "up", result("unknown", "missing or duplicate local IPCP status") end
     local part = text:match("IPCP%s+Local:%s*(.-)%s*Remote:")
@@ -151,7 +157,11 @@ local function parse_pp(text, id)
     local _, dns_count = part:lower():gsub("dns", "")
     if dns_count ~= count then return "up", result("unknown", "unrecognized local IPCP DNS field") end
     for _, kind in ipairs({"Primary", "Secondary"}) do if found[kind] then add(values, found[kind]) end end
-    if #values == 0 then return "up", result("absent", "local IPCP has no DNS addresses") end
+    if #values == 0 then
+        local item = result("absent", "local IPCP has no DNS addresses")
+        item.availability = "pp_no_dns"
+        return "up", item
+    end
     return "up", result("present", "local IPCP DNS addresses", values)
 end
 
@@ -272,7 +282,11 @@ local function combine(a, b)
             if not add(values, ip) then return result("unknown", "dynamic DNS address limit") end
         end
     end
-    if #values == 0 then return result("absent", "DHCP has no DNS addresses") end
+    if #values == 0 then
+        local item = result("absent", "DHCP has no DNS addresses")
+        item.availability = a.availability
+        return item
+    end
     return result("present", "DHCP DNS addresses", values)
 end
 local function run(reader, command)
@@ -290,12 +304,20 @@ local function v4_source(reader, id, snapshot)
         if item.state == "unknown" then return result("unknown", "unrecognized IPv4 DHCP lease state") end
         if item.state == "present" then has_ip = true end
     end
-    if not has_ip then return result("absent", "IPv4 DHCP has no current lease") end
+    if not has_ip then
+        local item = result("absent", "IPv4 DHCP has no current lease")
+        item.availability = "dhcp_no_lease"
+        return item
+    end
     if reader.v4_ambiguous or reader.v4_count ~= 1 or snapshot.count ~= 1 or not reader.v4[id] then
         return result("unknown", "IPv4 DHCP source is ambiguous")
     end
     if not snapshot.common or not snapshot.gateway then return result("unknown", "incomplete IPv4 DHCP common information") end
-    if #snapshot.servers == 0 then return result("absent", "IPv4 DHCP has no DNS addresses") end
+    if #snapshot.servers == 0 then
+        local item = result("absent", "IPv4 DHCP has no DNS addresses")
+        item.availability = "dhcp_no_dns"
+        return item
+    end
     return result("present", "IPv4 DHCP DNS addresses", snapshot.servers)
 end
 
@@ -381,7 +403,7 @@ function Reader:source(kind, id)
 end
 function Reader:pp_state(id) return self.pp_states[pp_id(id)] or "unknown" end
 local function same(a, b)
-    if not a or a.state ~= b.state or a.reason ~= b.reason or #a.servers ~= #b.servers then return false end
+    if not a or a.state ~= b.state or a.reason ~= b.reason or a.availability ~= b.availability or #a.servers ~= #b.servers then return false end
     for i, ip in ipairs(a.servers) do if ip ~= b.servers[i] then return false end end
     return true
 end

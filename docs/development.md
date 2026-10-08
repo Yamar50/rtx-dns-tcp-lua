@@ -59,7 +59,7 @@ python3 tools/build.py --config config/release.lua --output build/release/rtx-dn
 | `query_rate_per_ip`, `query_burst_per_ip` | IP単位の問い合わせ枠の毎秒補充数と最大蓄積数。既定20件/秒・40件、設定範囲はそれぞれ1〜1000。全接続で共有し、切断しても枠を保持 |
 | `max_client_ips` | 送信元の管理表の上限。既定256、`max_clients`以上4096以下。接続中・利用枠が未回復のIPは追い出さない |
 | `auto_config` | `true`ならYAMAHAルーターのDNSアクセス許可・ローカル登録名を読み取り、TCP/53で開始。配布版で使用 |
-| `config_reload_interval` | 自動設定時のconfig確認間隔。整数1〜3600秒。v1.0.0配布版は30秒。省略した試験版ではconfigを自動再読込しない。`dns_config="static"`や明示した`dns_policy`とは併用不可 |
+| `config_reload_interval` | 自動設定時のconfig確認間隔。整数1〜3600秒。v1.0.1配布版は30秒。省略した試験版ではconfigを自動再読込しない。`dns_config="static"`や明示した`dns_policy`とは併用不可 |
 | `listen_host`, `listen_port` | YAMAHAルーター側の待受IPv4アドレス・ポート。試験は53053、内蔵UDP DNSをTCPで補完するときは53 |
 | `allowed_clients` | 利用を許可するIPv4アドレス・IP範囲・CIDRの配列。自動設定を使わない場合に明示必須 |
 | `dns_config` | 通常は指定不要。試験用に`"static"`を指定した場合だけ稼働中configの自動読込を省略する。旧`"running"`指定も互換として受け付ける |
@@ -129,8 +129,14 @@ schedule at 10 startup * lua /lua/rtx-dns.lua
 save
 ```
 
-v1.0.0の配布プロファイルはDNS関連の設定変更を約30秒ごとに自動反映します。[設定再読込の仕様](config-reload.md)を参照してください。
+v1.0.1の配布プロファイルはDNS関連の設定変更を約30秒ごとに自動反映します。[設定再読込の仕様](config-reload.md)を参照してください。
 
 この節のように自動再読込を有効にしていない試験版では、読み取るルーター設定を変更した後に再起動します。また、Luaファイル内の設定やコードを変更した場合は、配布版でもファイルの再読込が必要です。`show status lua running`で対象のタスクIDを確認し、`terminate lua <ID>`で停止してから再実行します。YAMAHAルーター本体の再起動は必須ではありません。停止せずに重複起動しないでください。ログは`show log reverse`で`DNSRELAY`・`DNSRELOAD`を確認します。
 
 常設を解除する場合は、登録した番号の`no schedule at 10`と`save`を実行し、対象タスクを停止します。[起動スケジュールの公式仕様](https://www.rtpro.yamaha.co.jp/RT/manual/rt-common/schedule/schedule_at.html)
+
+## 状態表示の比較表を変更する場合
+
+英語・日本語の正本は`tools/status_text.json`です。`python3 tools/build_status_text.py`でCP932／UTF-8のASCIIエスケープ表`src/status_text.lua`を生成します。`make test`は生成物の一致も検査します。日本語の状態表示を追加するときは、機種・FW・CLIかLuaか・採取バイト列を確認し、推測した訳や部分一致を登録しません。CP932ではASCII英字と同じ値の後続バイトがあるため、日本語バイト列全体へ小文字変換をかけません。
+
+`tests/test_native_pp.lua`は採取表示を匿名化した入力で、PP現在状態・履歴・通知DNS・R10の固定DNS切替を確認します。UTF-8入力の成功を、その機種のLuaがUTF-8を出力した証拠とは扱いません。

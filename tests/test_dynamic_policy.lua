@@ -84,8 +84,7 @@ equal(selected(p, "wait.example").policy_id, "select:40")
 state("pp", "1", "absent")
 state("dhcp", "lan1", "absent")
 check(p:refresh(runtime))
-equal(host(p, "pp.example"), "192.0.2.10")
-check(not selected(p, "pp.example").upstreams[1].edns)
+check(selected(p, "pp.example").unavailable, "PP absence alone cannot authorize an inline default")
 equal(host(p, "dhcp.example"), "192.0.2.20")
 check(selected(p, "dhcp.example").upstreams[1].edns)
 equal(p:refresh(runtime), false)
@@ -127,6 +126,47 @@ equal(host(restrict, "restricted.example"), "203.0.113.4")
 equal(restrict:refresh(runtime), false)
 connections["7"] = "down"
 check(restrict:refresh(runtime), "restriction alone changes route generation")
+
+-- Replay the reporter's three-rule policy through the real status reader.
+-- The IPv6 DHCP source and all addresses are synthetic; this verifies the
+-- native en.ascii PP phrase without changing cross-rule failure handling.
+local Runtime = require("dns_runtime")
+local ascii_config = [[ipv6 lan2 dhcp service client
+dns server select 1 dhcp lan2 aaaa .
+dns server select 2 pp 1 any . restrict pp 1
+dns server select 3 192.0.2.3 any .]]
+local ascii_pp_status = "Current PPPoE session status is Connected."
+local ascii_runtime = check(Runtime.new(ascii_config, function(command)
+    if command == "show status pp 1" then
+        return true, "PP[01]:\n" .. ascii_pp_status .. "\n"
+            .. "IPCP Local: IP-Address Primary-DNS(192.0.2.53) Secondary-DNS(192.0.2.54), Remote: IP-Address\n"
+    end
+    equal(command, "show status ipv6 dhcp")
+    return true, "DHCPv6 status\nLAN2 [client]\ninfo-req:\nstate: established\nserver:\nDNS server[1]: 2001:db8::53\n"
+end))
+local ascii_policy = parse(ascii_config)
+ascii_runtime:refresh(); ascii_policy:refresh(ascii_runtime)
+for _, qtype in ipairs({1, 28}) do
+    equal(selected(ascii_policy, "example.test", qtype).rule_id, 2)
+    equal(host(ascii_policy, "example.test", qtype), "192.0.2.53")
+end
+ascii_pp_status = "unrecognized status"
+ascii_runtime:refresh(); ascii_policy:refresh(ascii_runtime)
+for _, qtype in ipairs({1, 28}) do
+    local route = selected(ascii_policy, "example.test", qtype)
+    equal(route.rule_id, 2); check(route.unavailable)
+    equal(route.reason, "restrict PP state unknown")
+end
+-- Previously supported explicit DOWN still skips the restricted rule.
+ascii_pp_status = "PPPoE session is not connected."
+ascii_runtime:refresh(); ascii_policy:refresh(ascii_runtime)
+for _, qtype in ipairs({1, 28}) do
+    equal(selected(ascii_policy, "example.test", qtype).rule_id, 3)
+    equal(host(ascii_policy, "example.test", qtype), "192.0.2.3")
+end
+ascii_pp_status = "Current PPPoE session status is Connected."
+ascii_runtime:refresh(); ascii_policy:refresh(ascii_runtime)
+equal(host(ascii_policy), "192.0.2.53")
 
 -- IPv6 configuration and acquired values are recognized but do not imply
 -- IPv6 TCP support. Same-route IPv4 candidates remain usable.

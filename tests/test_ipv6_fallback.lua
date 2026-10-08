@@ -109,8 +109,8 @@ available(parse(first .. "dns server dhcp lan1", {
 available(parse(first .. "dns server pp 1", {
     ["pp:1"] = {state = "present", servers = {"192.0.2.6"}}
 }), "default", "192.0.2.6")
-available(parse(ordinary .. "dns server select 1 pp 1 2001:db8::1 any .\n" .. last,
-    {["pp:1"] = {state = "absent"}}), "select:99", "192.0.2.99")
+blocked(parse(ordinary .. "dns server select 1 pp 1 2001:db8::1 any .\n" .. last,
+    {["pp:1"] = {state = "absent"}}), "select:1", "source_absent")
 available(parse("dns server 2001:db8::254\ndns server select 1 dhcp lan1 any .\n" .. last,
     {["dhcp:lan1"] = {state = "absent"}}), "select:99", "192.0.2.99")
 available(parse(ordinary .. "dns server select 1 dhcp lan1 any .\n" .. last,
@@ -148,7 +148,7 @@ for _, row in ipairs({
     {"dns server select 2 2001:db8::2 edns=maybe any .", "options_unsupported"},
     {"dns server select 2 2001:db8::2 nat46=1 any .", "nat46"},
     {"dns server select 2 dhcp lan1 nat46=1 any .", "nat46"},
-    {"dns server select 2 pp 1 2001:db8::2 nat46=1 any .", "nat46"},
+    {"dns server select 2 pp 1 2001:db8::2 nat46=1 any .", "source_absent"},
     {"dns server select 2 dhcp lan1 edns=maybe any .", "source_unsupported"},
     {"dns server select 2 reject any bad*middle.test", "condition_unknown"}
 }) do
