@@ -94,7 +94,7 @@ sequenceDiagram
 
 通常のUDP問い合わせは、スクリプトの有無にかかわらず内蔵DNSが処理します。YAMAHAルーターに登録した簡易DNSのレコードも引き続き利用できます。TCPで問い合わせ直す動作は[RFC 7766](https://www.rfc-editor.org/rfc/rfc7766.html#section-4)に、内蔵DNSのTCP未対応は[ヤマハ公式FAQ](https://www.rtpro.yamaha.co.jp/RT/FAQ/TCPIP/dns-recursive-server.html)に説明があります。
 
-v1.0.1では、PPPoEの状態表示の解析とPP・DHCPのDNS選択を修正しました。RTX830・RTX1210での実機試験に加え、RTX1300でも協力者からTCP回答と大型TXTの取得成功が報告されています。[変更点と試験結果](docs/releases/v1.0.1-details.md)
+v1.0.1では、PPPoEの状態表示の解析とPP・DHCPのDNS選択を修正しました。RTX830・RTX1210での実機試験に加え、2026-10-12には、しよさんからRTX1300・RTX5000・RTX840・RTX820・RTX810・NVR700の6機種での動作報告をいただきました。**幅広い機種での再検証、ありがとうございます。** [報告と確認範囲](docs/compatibility.md#v101-contributor-reports) · [変更点と検証結果](docs/releases/v1.0.1-details.md)
 
 ---
 
