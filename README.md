@@ -96,6 +96,10 @@ sequenceDiagram
 
 v1.0.1では、PPPoEの状態表示の解析とPP・DHCPのDNS選択を修正しました。RTX830・RTX1210での実機試験に加え、2026-10-12には、しよさんからRTX1300・RTX5000・RTX840・RTX820・RTX810・NVR700の6機種での動作報告をいただきました。**幅広い機種での再検証、ありがとうございます。** [報告と確認範囲](docs/compatibility.md#v101-contributor-reports) · [変更点と検証結果](docs/releases/v1.0.1-details.md)
 
+WhiteCoffee-orgさんからも、N1200でv1.0.1を使い、TCPによるA・AAAA・大型TXTの取得に成功したとの[追加報告](docs/compatibility.md#n1200-v101-report)をいただきました。**再確認とご報告、ありがとうございます。**
+
+hapicomさんの[ブログ記事「YAMAHAルーターのDNSをtcp fallbackに対応させる魔改造」](https://blog.hapicom.jp/entry/yamahadns)でご紹介いただきました。RTX1300を使うホテルでの利用報告も掲載されています。**ご紹介ありがとうございます。** [報告の確認範囲](docs/compatibility.md#hapicom-rtx1300-report)
+
 ---
 
 **[技術的な詳しい説明](docs/README.md)** — 対応機種、仕様、更新・削除、試験結果、ライセンスと免責事項。
