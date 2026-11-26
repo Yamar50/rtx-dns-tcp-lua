@@ -6,14 +6,14 @@
 
 ## オンラインインストール
 
-### v1.0.1をインストール
+### v1.0.2をインストール
 
 正式版です。[対応機種と動作確認状況](docs/compatibility.md)
 
 次のコマンドをコピーし、方法1・方法2のどちらかで実行してください。
 
 ```text
-lua -e 'local DNSINSTALL_BOOT="yes";local r=rt.httprequest({url="https://raw.githubusercontent.com/Yamar50/rtx-dns-tcp-lua/f771b528ce71c34bb664de1dde35fc747e155518/installer/versions/v1.0.1/rtx-dns-install.lua",method="GET",timeout=30});assert(r.rtn1 and r.code==200 and type(r.body)=="string" and #r.body==25773,"Installer download failed");assert(loadstring(r.body))(DNSINSTALL_BOOT,"v1.0.1")'
+lua -e 'local DNSINSTALL_BOOT="yes";local r=rt.httprequest({url="https://raw.githubusercontent.com/Yamar50/rtx-dns-tcp-lua/aeb0e2431a4072ae70e7e5c12986a509a64540b5/installer/versions/v1.0.2/rtx-dns-install.lua",method="GET",timeout=30});assert(r.rtn1 and r.code==200 and type(r.body)=="string" and #r.body==25773,"Installer download failed");assert(loadstring(r.body))(DNSINSTALL_BOOT,"v1.0.2")'
 ```
 
 ※ルーター再起動時の自動起動スケジュールも設定し、現在のルーター設定を保存します。
@@ -24,7 +24,7 @@ lua -e 'local DNSINSTALL_BOOT="yes";local r=rt.httprequest({url="https://raw.git
 
 ![Web管理画面の「コマンドの入力」と「実行」ボタン](docs/images/install-webgui-v099-pointer.png)
 
-*画面はv0.9.9の操作例です。実行するコマンドは上記のv1.0.1をコピーしてください。*
+*画面はv0.9.9の操作例です。実行するコマンドは上記のv1.0.2をコピーしてください。*
 
 [インストール完了の確認方法](docs/installer.md#webguiからインストールする場合)
 
@@ -36,7 +36,7 @@ lua -e 'local DNSINSTALL_BOOT="yes";local r=rt.httprequest({url="https://raw.git
 
 ![管理者モードでコマンドを貼り付けた入力例（画面イメージ）](docs/images/install-console-v099.png)
 
-*v0.9.9の管理者モードでの入力例（画面イメージ）。実行するコマンドは上記のv1.0.1をコピーしてください。*
+*v0.9.9の管理者モードでの入力例（画面イメージ）。実行するコマンドは上記のv1.0.2をコピーしてください。*
 
 お使いの機種での[動作報告](https://github.com/Yamar50/rtx-dns-tcp-lua/issues/new?template=02-device-report.yml)をいただけたら嬉しいです。
 
@@ -93,6 +93,8 @@ sequenceDiagram
 ```
 
 通常のUDP問い合わせは、スクリプトの有無にかかわらず内蔵DNSが処理します。YAMAHAルーターに登録した簡易DNSのレコードも引き続き利用できます。TCPで問い合わせ直す動作は[RFC 7766](https://www.rfc-editor.org/rfc/rfc7766.html#section-4)に、内蔵DNSのTCP未対応は[ヤマハ公式FAQ](https://www.rtpro.yamaha.co.jp/RT/FAQ/TCPIP/dns-recursive-server.html)に説明があります。
+
+v1.0.2ではTCPの新規接続受付が空振りを繰り返したときのCPU高負荷を予防します。[調査の経緯と変更内容](docs/releases/v1.0.2.md)
 
 v1.0.1では、PPPoEの状態表示の解析とPP・DHCPのDNS選択を修正しました。RTX830・RTX1210での実機試験に加え、2026-10-12には、しよさんからRTX1300・RTX5000・RTX840・RTX820・RTX810・NVR700の6機種での動作報告をいただきました。**幅広い機種での再検証、ありがとうございます。** [報告と確認範囲](docs/compatibility.md#v101-contributor-reports) · [変更点と検証結果](docs/releases/v1.0.1-details.md)
 
