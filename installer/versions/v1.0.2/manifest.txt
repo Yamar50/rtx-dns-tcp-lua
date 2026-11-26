@@ -1,0 +1,2 @@
+v1.0.2
+5a62a86b059eeb645e1aa65f9f3fb896f2befba229ba84a6701e881101ac3556  rtx-dns.lua

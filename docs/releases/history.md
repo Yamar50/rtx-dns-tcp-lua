@@ -4,10 +4,11 @@
 
 ソースコード・テスト・ドキュメントはすべてOpenAI Codexで生成した。
 
-現在の配布版は[v1.0.1](https://github.com/Yamar50/rtx-dns-tcp-lua/releases/tag/v1.0.1)です。このページは過去版の変更内容・配布物・試験記録への案内です。過去の説明と試験結果は、その版の記録として残しています。
+現在の配布版は[v1.0.2](https://github.com/Yamar50/rtx-dns-tcp-lua/releases/tag/v1.0.2)です。このページは過去版の変更内容・配布物・試験記録への案内です。過去の説明と試験結果は、その版の記録として残しています。
 
 | バージョン | 主な変更 | 説明・試験記録 |
 |---|---|---|
+| [v1.0.1](https://github.com/Yamar50/rtx-dns-tcp-lua/releases/tag/v1.0.1) | PP・DHCPのDNS選択と英語表示への対応 | [詳細](v1.0.1-details.md) |
 | [v1.0.0](https://github.com/Yamar50/rtx-dns-tcp-lua/releases/tag/v1.0.0) | DNS関連設定の自動再読込、手動再起動不要 | [詳細](v1.0.0-details.md)・[連続設定変更試験](../results/config-reload-2026-10-05.md) |
 | [v0.9.9](https://github.com/Yamar50/rtx-dns-tcp-lua/releases/tag/v0.9.9) | 機種とインターフェースの対応拡大、IPv6のみの規則からIPv4 DNSへの切替 | [詳細](v0.9.9-details.md)・[機能試験](../validation.md#v099-validation)・[負荷試験](../load-test-v0.9.9.md) |
 | [v0.1.4](https://github.com/Yamar50/rtx-dns-tcp-lua/releases/tag/v0.1.4) | レコード数の多い応答で送信前に接続が閉じる問題を修正 | [詳細](v0.1.4-details.md)・[修正後の試験](../validation.md#v014-validation) |
@@ -25,7 +26,15 @@ v0.9.9以前では、PP・DHCPの取得状態を更新する機能とconfigの�
 
 ## 過去版のオンラインインストール
 
-次のコマンドは当時の配布物を導入します。最新版への更新には[README](../../README.md)のv1.0.1用コマンドを使用してください。
+次のコマンドは当時の配布物を導入します。最新版への更新には[README](../../README.md)のv1.0.2用コマンドを使用してください。
+
+<a id="version-v101"></a>
+
+### v1.0.1をインストール
+
+```text
+lua -e 'local DNSINSTALL_BOOT="yes";local r=rt.httprequest({url="https://raw.githubusercontent.com/Yamar50/rtx-dns-tcp-lua/f771b528ce71c34bb664de1dde35fc747e155518/installer/versions/v1.0.1/rtx-dns-install.lua",method="GET",timeout=30});assert(r.rtn1 and r.code==200 and type(r.body)=="string" and #r.body==25773,"Installer download failed");assert(loadstring(r.body))(DNSINSTALL_BOOT,"v1.0.1")'
+```
 
 <a id="version-v100"></a>
 

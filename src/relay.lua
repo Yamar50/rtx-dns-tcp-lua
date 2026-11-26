@@ -666,11 +666,21 @@ end
 
 function Relay:_accept()
   if self.now < self.accept_retry_at then return true end
-  for _ = 1, 8 do
+  for attempt = 1, 8 do
     if self.client_count >= self.cfg.max_clients then return true end
     local socket, err = call(self.listener, "accept")
     if not socket then
-      if waiting(err) then return true end
+      if waiting(err) then
+        -- An empty queue after accepting at least one client is normal.
+        if attempt == 1 then
+          -- Resume on the second clock tick so a whole second passes on RTX.
+          self.accept_retry_at = self.now + 2
+          self:_inc("accept_first_waits")
+          self:_event("accept_first_wait", "TCP accept first wait bind=" .. self.cfg.listen_host
+            .. ":" .. self.cfg.listen_port .. " result=" .. tostring(err):gsub("[%c]", " "):sub(1, 80))
+        end
+        return true
+      end
       self:_inc("accept_failures")
       self:_event("accept", "accept failed: " .. tostring(err))
       if invalid_listener(err) then
@@ -938,6 +948,7 @@ function Relay:_timers()
       .. " pending=" .. snapshot.pending .. " clients=" .. snapshot.clients
       .. " dials=" .. (snapshot.connection_attempts or 0) .. " failures=" .. (snapshot.upstream_failures or 0)
       .. " accept_failures=" .. (snapshot.accept_failures or 0)
+      .. " accept_first_waits=" .. (snapshot.accept_first_waits or 0)
       .. " ip_connections_limited=" .. (snapshot.clients_connection_limited or 0)
       .. " ip_queries_limited=" .. (snapshot.queries_rate_limited or 0)
       .. " ip_reconnects_limited=" .. (snapshot.clients_rate_limited or 0)
@@ -991,8 +1002,14 @@ function Relay:step()
   local function interest(list, map, socket, kind, object)
     list[#list + 1] = socket; map[socket] = { kind, object }
   end
-  if self.listener and self.client_count < self.cfg.max_clients and self.now >= self.accept_retry_at then
-    interest(readers, read_kind, self.listener, "accept", self)
+  local select_timeout = self.cfg.select_timeout
+  if self.listener and self.client_count < self.cfg.max_clients then
+    local remaining = self.accept_retry_at - self.now
+    if remaining > 0 then
+      select_timeout = math.min(select_timeout, remaining)
+    else
+      interest(readers, read_kind, self.listener, "accept", self)
+    end
   end
   for socket, client in pairs(self.clients) do
     if not client.read_eof and client.jobs + #client.output < self.cfg.client_pipeline then
@@ -1009,7 +1026,7 @@ function Relay:step()
   for _, job in pairs(self.jobs) do
     if job.udp then interest(readers, read_kind, job.udp, "local", job) end
   end
-  local ok, readable, writable, err = pcall(self.api.select, readers, writers, self.cfg.select_timeout)
+  local ok, readable, writable, err = pcall(self.api.select, readers, writers, select_timeout)
   self.now = self:_clock()
   -- A changed ACL must close existing sessions before processing readiness
   -- collected under the previous configuration.
