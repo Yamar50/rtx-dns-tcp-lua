@@ -830,6 +830,56 @@ function tests.healthy_secondary_continues_during_primary_resource_probe()
   r:close()
 end
 
+function tests.accept_first_wait_pauses_only_listener_and_retries_queued_connection()
+  local env = mock()
+  env.api.gettime = function() return math.floor(env.time) end
+  local r = relay(env, {select_timeout = 10})
+  local existing = env.client(query(1))
+  until_true(r, function() return #existing.output > 0 end)
+  eq(r:stats_snapshot().accept_first_waits, nil, "normal queue drain is not a first wait")
+  local queued = env.client(query(2))
+  env.accept_error = "would block"
+  steps(r, 1)
+  eq(r:stats_snapshot().accept_first_waits, 1)
+  eq(r:stats_snapshot().accept_failures, nil)
+  local retry_at = r.accept_retry_at
+  eq(retry_at, r.now + 2, "allow one extra tick on an integer clock")
+  existing.output, existing.input = "", frame(query(3))
+  until_true(r, function() return #existing.output > 0 end)
+  eq(existing.output, frame(answer(query(3))))
+  eq(#env.accept_failures, 1)
+  eq(#queued.output, 0)
+  for _, s in ipairs(env.last_readers) do assert(s ~= r.listener) end
+  env.accept_error = nil
+  steps(r, 1)
+  eq(math.floor(env.time), retry_at, "long select timeout must not delay rearming the listener")
+  until_true(r, function() return #queued.output > 0 end)
+  eq(queued.output, frame(answer(query(2))))
+  eq(r:stats_snapshot().accept_first_waits, 1)
+  r:close()
+end
+
+function tests.repeated_accept_first_waits_are_counted_and_detail_logs_are_limited()
+  local env = mock()
+  local r = relay(env)
+  env.client(query(5))
+  env.accept_error = "timeout"
+  until_true(r, function() return #env.accept_failures == 3 end)
+  eq(r:stats_snapshot().accept_first_waits, 3)
+  for i = 2, 3 do assert(env.accept_failures[i] - env.accept_failures[i-1] >= 1) end
+  env.time = 61
+  steps(r, 1)
+  local detail = {}
+  for _, line in ipairs(env.logs) do
+    if line:find("DNSRELAY TCP accept first wait", 1, true) then detail[#detail + 1] = line end
+  end
+  eq(#detail, 2)
+  assert(detail[1]:find("bind=198.18.32.42:53053 result=timeout suppressed=0", 1, true))
+  assert(detail[2]:find("suppressed=2", 1, true))
+  eq(r:stats_snapshot().accept_first_waits, 4)
+  r:close()
+end
+
 function tests.accept_resource_failure_waits_without_blocking_existing_clients()
   local env = mock()
   local cache = { get = function(_, q) if q.name == "cached.test." then return answer(q.raw) end end,
@@ -854,7 +904,7 @@ function tests.accept_resource_failure_waits_without_blocking_existing_clients()
   for _, socket in ipairs(env.last_readers) do assert(socket ~= r.listener, "listener monitored during accept cooldown") end
   local before = env.time
   steps(r, 1)
-  assert(env.time >= before + 1, "idle event loop must wait despite queued unaccepted connection")
+  assert(env.time > before and env.time >= r.accept_retry_at, "idle event loop must wait out the remaining cooldown")
   steps(r, 1)
   eq(#env.accept_failures, 2)
   steps(r, 6)
