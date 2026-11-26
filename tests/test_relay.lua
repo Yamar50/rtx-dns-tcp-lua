@@ -832,14 +832,18 @@ end
 
 function tests.accept_first_wait_pauses_only_listener_and_retries_queued_connection()
   local env = mock()
-  env.api.gettime = function() return math.floor(env.time) end
+  local host_floor = math.floor
+  env.api.gettime = function() return host_floor(env.time) end
   local r = relay(env, {select_timeout = 10})
   local existing = env.client(query(1))
   until_true(r, function() return #existing.output > 0 end)
   eq(r:stats_snapshot().accept_first_waits, nil, "normal queue drain is not a first wait")
   local queued = env.client(query(2))
   env.accept_error = "would block"
-  steps(r, 1)
+  math.floor = nil -- Yamaha integer Lua has no math.floor.
+  local ok, err = pcall(steps, r, 1)
+  math.floor = host_floor
+  assert(ok, err)
   eq(r:stats_snapshot().accept_first_waits, 1)
   eq(r:stats_snapshot().accept_failures, nil)
   local retry_at = r.accept_retry_at

@@ -2934,7 +2934,7 @@ function Relay:_accept()
         -- An empty queue after accepting at least one client is normal.
         if attempt == 1 then
           -- Resume on the second clock tick so a whole second passes on RTX.
-          self.accept_retry_at = math.floor(self.now) + 2
+          self.accept_retry_at = self.now + 2
           self:_inc("accept_first_waits")
           self:_event("accept_first_wait", "TCP accept first wait bind=" .. self.cfg.listen_host
             .. ":" .. self.cfg.listen_port .. " result=" .. tostring(err):gsub("[%c]", " "):sub(1, 80))
