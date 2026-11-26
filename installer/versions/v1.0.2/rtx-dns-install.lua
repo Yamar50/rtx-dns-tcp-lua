@@ -546,7 +546,7 @@ end
 return M
 
 end)()
-local release = {version="v1.0.2",sha256="cf442b44b95facaec1bb8758bddb94dec4913ddd9ddda1cacc7ef5e9dd490f1e",bytes=170580,url="https://raw.githubusercontent.com/Yamar50/rtx-dns-tcp-lua/65b7e01b8f60414689666faaf3140dae5092f221/installer/versions/v1.0.2/rtx-dns.lua"}
+local release = {version="v1.0.2",sha256="5a62a86b059eeb645e1aa65f9f3fb896f2befba229ba84a6701e881101ac3556",bytes=170568,url="https://raw.githubusercontent.com/Yamar50/rtx-dns-tcp-lua/30279ad53426ef3ec2b0beeb1773e080e1cd188f/installer/versions/v1.0.2/rtx-dns.lua"}
 local mode, expected_version = ...
 local env
 if expected_version ~= nil then
