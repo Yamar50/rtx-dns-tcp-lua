@@ -13,7 +13,7 @@
 次のコマンドをコピーし、方法1・方法2のどちらかで実行してください。
 
 ```text
-lua -e 'local DNSINSTALL_BOOT="yes";local r=rt.httprequest({url="https://raw.githubusercontent.com/Yamar50/rtx-dns-tcp-lua/aeb0e2431a4072ae70e7e5c12986a509a64540b5/installer/versions/v1.0.2/rtx-dns-install.lua",method="GET",timeout=30});assert(r.rtn1 and r.code==200 and type(r.body)=="string" and #r.body==25773,"Installer download failed");assert(loadstring(r.body))(DNSINSTALL_BOOT,"v1.0.2")'
+lua -e 'local DNSINSTALL_BOOT="yes";local r=rt.httprequest({url="https://raw.githubusercontent.com/Yamar50/rtx-dns-tcp-lua/0deccbac46400726bd790104c72c5e7a22474e5e/installer/versions/v1.0.2/rtx-dns-install.lua",method="GET",timeout=30});assert(r.rtn1 and r.code==200 and type(r.body)=="string" and #r.body==25773,"Installer download failed");assert(loadstring(r.body))(DNSINSTALL_BOOT,"v1.0.2")'
 ```
 
 ※ルーター再起動時の自動起動スケジュールも設定し、現在のルーター設定を保存します。
